@@ -34,3 +34,4 @@
     (let [log* (sublog log 0 (inc after-index) current-index)]
       (into log* entries))))
 
+

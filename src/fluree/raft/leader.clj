@@ -1,18 +1,19 @@
 (ns fluree.raft.leader
   (:require [fluree.raft.log :as raft-log]
-            [clojure.core.async :as async]))
+            [clojure.core.async :as async]
+            [clojure.tools.logging :as log]))
 
 (declare send-append-entry)
 
 (defn is-leader?
-  [raft]
-  (= :leader (:status @(:raft-state raft))))
+  [raft-state]
+  (= :leader (:status raft-state)))
 
 (defn remote-servers
   "Returns a list of all servers excluding this-server."
-  [raft]
-  (let [this-server (get-in raft [:config :this-server])]
-    (-> @(:raft-state raft)
+  [raft-state]
+  (let [this-server (:this-server raft-state)]
+    (-> raft-state
         :servers
         (dissoc this-server)
         keys)))
@@ -22,35 +23,6 @@
   [raft]
   (let [election-timeout (get-in raft [:config :election-timeout])]
     (+ election-timeout (rand-int election-timeout))))
-
-(defn reset-heartbeat
-  "Resets the heartbeat by putting to a core async channel
-  the amount of time in ms to next timeout.
-
-  Heartbeat will trigger and send a blank append-entries to all followers
-  to maintain leadership
-
-  Returns time in epoch millis when the next timeout will occur."
-  [raft]
-  (let [timeout-reset-chan    (get-in raft [:config :timeout-reset-chan])
-        broadcast-time        (get-in raft [:config :broadcast-time])
-        epoch-ms-at-broadcast (+ (System/currentTimeMillis) broadcast-time)]
-    (async/put! timeout-reset-chan broadcast-time)
-    epoch-ms-at-broadcast))
-
-(defn reset-election-timeout
-  "Resets the election timeout. Does this by putting to a core async
-  channel a 'reset' trigger containing the amount of time in ms to
-  next timeout. Upon trigger, creates a new core async timeout channel
-  and uses alt! to trigger a timeout or another reset.
-
-  Returns time in epoch millis when the next timeout will occur."
-  [raft]
-  (let [timeout-reset-chan  (get-in raft [:config :timeout-reset-chan])
-        next-timeout-ms     (generate-election-timeout raft)
-        epoch-ms-at-timeout (+ (System/currentTimeMillis) next-timeout-ms)]
-    (async/put! timeout-reset-chan next-timeout-ms)
-    epoch-ms-at-timeout))
 
 
 (defn minimum-majority
@@ -72,169 +44,177 @@
        (minimum-majority)))
 
 
+(defn become-follower
+  "Transition from a leader to a follower"
+  [raft-state new-term]
+  (assoc raft-state :term new-term
+                    :status :follower
+                    :leader nil
+                    :voted-for nil
+                    :timeout (async/timeout (generate-election-timeout raft-state))))
 
 
-(defn append-entries-callback
-  [raft to-index server response]
-  (let [{:keys [term success]} response]
-    ;; if we lost leadership, ignore response
-    (when (is-leader? raft)
+(defn append-entries-response-event
+  "Updates raft state with an append-entries response.
+
+  A few of the things that can happen:
+  - If response has a newer term, we'll become a follower
+  - If the response has success: true, we'll update that server's stats and possibly update the commit index
+  - If the response has success: false, we'll decrement that server's next-index and resend a new append-entry
+    to that server immediately with older log entries."
+  [raft-state response-map]
+  (let [{:keys [server request response]} response-map
+        {:keys [term success]} response
+        {:keys [prev-log-index entries]} request
+        next-index (inc (+ prev-log-index (count entries)))]
+    (if-not (is-leader? raft-state)
+      ;; if we are no longer leader, ignore response
+      raft-state
       (cond
         ;; response has a newer term, go to follower status and reset election timeout
-        (> term (:term @(:raft-state raft)))
-        (do
-          (swap! (:raft-state raft) #(assoc % :term (max term (:term %)) :status :follower))
-          (reset-election-timeout raft))
+        (> term (:term raft-state))
+        (become-follower raft-state term)
 
         ;; update successful
         (true? success)
-        (let [old-state @(:raft-state raft)
-              new-state (swap! (:raft-state raft)
-                               (fn [state]
-                                 (let [{:keys [servers commit log index]} state
-                                       ;; current next-index and match-index for the responding server
-                                       {:keys [next-index match-index]} (get servers server)
-                                       ;; update master server map of status
-                                       servers* (update servers server assoc
-                                                        :next-index (max (inc to-index) next-index)
-                                                        :match-index (max to-index match-index))
-                                       ;; recalculate max-commit
-                                       commit*  (recalc-commit-index servers*)]
-
-                                   ;; new commits, write to state machine
-                                   (when (> commit* commit)
-                                     (println "--->>> APPLY COMMIT!!! " {:new commit* :old commit})
-                                     (let [commit-entries (raft-log/sublog log (inc commit) (inc commit*) index)
-                                           state-machine  (get-in raft [:config :state-machine])]
-                                       (doseq [entry-map commit-entries]
-                                         (state-machine (:entry entry-map)))))
-
-                                   (assoc state :servers servers*
-                                                :commit commit*))))]
-
-          ;; if we increased the commit, we should immediately send out a new update
-          (when (> (:commit new-state) (:commit old-state))
-            (println "--->>> commit has incresed!!! " {:new (:commit new-state) :old (:commit old-state)})
-            (reset-heartbeat raft)))
+        (let [server-stats  (:servers raft-state)
+              server-stats* (update server-stats server
+                                    #(assoc % :next-index (max next-index (:next-index %))
+                                              :match-index (max (dec next-index) (:match-index %))))]
+          (assoc raft-state :servers server-stats*))
 
         ;; update failed - decrement next-index and re-send an update
         (false? success)
-        (do
-          (swap! (:raft-state raft) update-in [:servers server :next-index] dec)
-          (send-append-entry raft server))))))
+        (let [raft-state* (update-in raft-state [:servers server :next-index] dec)]
+          (send-append-entry raft-state* server)
+          raft-state*)))))
+
+
+(defn append-entries-callback
+  "Callback function called with response from your configured send-rpc-fn."
+  [event-channel server request-map response]
+  (async/put! event-channel [:append-entries-response {:server   server
+                                                       :request  request-map
+                                                       :response response}]))
 
 
 (defn send-append-entry
   "Sends an append entry request to given server based on current state."
-  [raft server]
-  (let [send-rpc-fn   (get-in raft [:config :send-rpc-fn])
-        this-server   (get-in raft [:config :this-server])
-        {:keys [servers term index log commit]} @(:raft-state raft)
-        prev-log-term (:term (peek log))
-        next-index    (get-in servers [server :next-index])
-        entries       (if (> next-index index)
-                        []
-                        (raft-log/sublog log next-index (inc index) index))
-        data          {:term           term
-                       :leader-id      this-server
-                       :prev-log-index (max (dec next-index) 0)
-                       :prev-log-term  prev-log-term
-                       :entries        entries
-                       :leader-commit  commit}
-        callback      (partial append-entries-callback raft index server)]
-    (send-rpc-fn raft server :append-entries data callback)))
+  [raft-state server]
+  (let [{:keys [send-rpc-fn timeout-reset-chan]} (:config raft-state)
+        {:keys [servers term index log commit this-server]} raft-state
+        next-index     (get-in servers [server :next-index])
+        prev-log-index (max (dec next-index) 0)
+        prev-log-term  (if (= 0 prev-log-index)
+                         0
+                         (:term (raft-log/modified-nth log prev-log-index index)))
+        entries        (if (> next-index index)
+                         []
+                         (raft-log/sublog log next-index (inc index) index))
+        data           {:term           term
+                        :leader-id      this-server
+                        :prev-log-index prev-log-index
+                        :prev-log-term  prev-log-term
+                        :entries        entries
+                        :leader-commit  commit}
+        callback       (partial append-entries-callback timeout-reset-chan server data)]
+    (send-rpc-fn raft-state server :append-entries data callback)
+    raft-state))
 
 
 (defn send-append-entries
   "Sends append entries requests to all servers."
-  [raft]
-  (doseq [server-id (remote-servers raft)]
-    (send-append-entry raft server-id)))
-
+  [raft-state]
+  (let [heartbeat-timeout (get-in raft-state [:config :broadcast-time])]
+    (doseq [server-id (remote-servers raft-state)]
+      (send-append-entry raft-state server-id))
+    ;; reset timeout
+    (assoc raft-state :timeout (async/timeout heartbeat-timeout))))
 
 
 (defn become-leader
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
-  [raft leader-term]
-  (println (str (get-in raft [:config :this-server]) " ===== Become leader!" leader-term))
-  (let [state*  (swap! (:raft-state raft)
-                       (fn [state]
-                         (if (not= leader-term (:term state))
-                           ;; no-op, some other process changed state, no longer candidate for this term
-                           state
-                           ;; become leader
-                           (let [this-server (get-in raft [:config :this-server])
-                                 next-index  (inc (:index state))
-                                 servers*    (reduce-kv
-                                               (fn [acc server server-status]
-                                                 (assoc acc server (assoc server-status :next-index next-index
-                                                                                        :match-index 0)))
-                                               {}
-                                               (:servers state))]
-
-                             (assoc state :status :leader
-                                          :leader this-server
-                                          :servers servers*)))))
-        ;; make sure we got leadership
-        leader? (= :leader (:status state*))]
+  [raft-state]
+  (let [this-server    (:this-server raft-state)
+        broadcast-time (get-in raft-state [:config :broadcast-time])
+        next-index     (inc (:index raft-state))
+        servers        (reduce-kv
+                         (fn [acc server server-status]
+                           (assoc acc server (assoc server-status :next-index next-index
+                                                                  :match-index 0)))
+                         {}
+                         (:servers raft-state))
+        raft-state*    (assoc raft-state :status :leader
+                                         :leader this-server
+                                         :servers servers
+                                         :timeout (async/timeout broadcast-time))]
+    ;; send an initial append-entries to make sure everyone knows we are the leader
+    (send-append-entries raft-state*)))
 
 
-    (when leader?
-      (reset-heartbeat raft)                                ;; kick off new broadcast heartbeat
-      )))
+(defn request-vote-response-event
+  [raft-state response-map]
+  (let [{:keys [server request response]} response-map
+        proposed-term (:term request)
+        {:keys [vote-granted term]} response
+        raft-state*   (update-in raft-state [:servers server :vote]
+                                 ;; :vote holds two tuple of [term vote], only update request term newer
+                                 (fn [[term vote]]
+                                   (if (or (nil? term) (< term proposed-term))
+                                     [proposed-term vote-granted]
+                                     ;; either an existing vote exists, or it is for a newer term... leave as-is
+                                     [term vote])))
+        votes-for     (->> (:servers raft-state*)
+                           vals
+                           (map :vote)
+                           ;; make sure votes in state are for this term
+                           (filter #(and (= proposed-term (first %)) (true? (second %))))
+                           (count))
+        majority?     (> votes-for (/ (count (:servers raft-state*)) 2))]
+    (cond
+      ;; response has a newer term, go to follower status and reset election timeout
+      (> term (:term raft-state*))
+      (become-follower raft-state* term)
+
+
+      (and majority? (not (is-leader? raft-state*)))
+      (become-leader raft-state*)
+
+
+      :else
+      raft-state*)))
 
 
 (defn request-vote-callback
   "Callback function for each rpc call to get a vote."
-  [raft proposed-term server response]
-
-  ;; update this vote in state
-  (swap! (:raft-state raft) update-in [:servers server :vote]
-         (fn [[term vote]]
-           (if (or (nil? term) (< term proposed-term))
-             [proposed-term (:vote-granted response)]
-             ;; either an existing vote exists, or it is for a newer term... leave as-is
-             [term vote])))
-
-  ;; tally votes, and if we received majority become the leader
-  (let [server-state (:servers @(:raft-state raft))
-        votes-for    (->> server-state
-                          vals
-                          (map :vote)
-                          ;; make sure votes in state are for this term
-                          (filter #(and (= proposed-term (first %)) (true? (second %))))
-                          (count))
-        majority?    (> votes-for (/ (count server-state) 2))]
-    ;; if we have majority, and we are not already leader, become leader
-    (when (and majority? (not (is-leader? raft)))
-      (become-leader raft proposed-term))
-    majority?))
+  [event-channel server request-map response]
+  (async/put! event-channel [:request-vote-response {:server   server
+                                                     :request  request-map
+                                                     :response response}]))
 
 
 (defn request-votes
   "Request votes for leadership from all followers."
-  [raft]
-  (let [this-server    (get-in raft [:config :this-server])
-        raft-state     (swap! (:raft-state raft)
-                              #(-> %
-                                   (assoc :term (inc (:term %))
-                                          :status :candidate ;; register as candidate in state
-                                          :leader nil
-                                          :voted-for this-server)
-                                   ;; register vote for self
-                                   (assoc-in [:servers this-server :vote] [(inc (:term %)) true])))
+  [raft-state]
+  (let [{:keys [send-rpc-fn timeout-reset-chan]} (get raft-state :config)
+        this-server    (:this-server raft-state)
+        proposed-term  (inc (:term raft-state))
+        raft-state*    (-> raft-state
+                           (assoc :term proposed-term
+                                  :status :candidate        ;; register as candidate in state
+                                  :leader nil
+                                  :voted-for this-server)
+                           ;; register vote for self
+                           (assoc-in [:servers this-server :vote] [proposed-term true]))
 
-        send-rpc-fn    (get-in raft [:config :send-rpc-fn])
-        {:keys [log index term]} raft-state
-
+        {:keys [log index term]} raft-state*
         last-log-entry (first (raft-log/sublog log index (inc index) index))
         request        {:term           term
                         :candidate-id   this-server
                         :last-log-index index
                         :last-log-term  (or (:term last-log-entry) 0)}]
-    (doseq [server (remote-servers raft)]
-      (let [callback (partial request-vote-callback raft term server)]
-        (send-rpc-fn raft server :request-vote request callback)))))
-
-
+    (doseq [server (remote-servers raft-state*)]
+      (let [callback (partial request-vote-callback timeout-reset-chan server request)]
+        (send-rpc-fn raft-state* server :request-vote request callback)))
+    (assoc raft-state* :timeout (async/timeout (generate-election-timeout raft-state)))))
 
