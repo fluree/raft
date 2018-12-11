@@ -119,6 +119,11 @@
 
 
 (defn update-commits
+  "Process new commits if leader-commit is updated.
+
+  Put commit results on callback async channel if present.
+
+  Update local raft state :commit"
   [raft-state leader-commit]
   (if (= (:commit raft-state) leader-commit)
     raft-state                                              ;; no change
@@ -131,7 +136,9 @@
                                  (let [resp (state-machine-fn (:entry entry-map))]
                                    (if-let [callback-chan (get callbacks (:id entry-map))]
                                      (do
-                                       (async/put! callback-chan resp)
+                                       (if (nil? resp)
+                                         (async/close! callback-chan)
+                                         (async/put! callback-chan resp))
                                        (dissoc callbacks (:id entry-map)))
                                      callbacks)))
                                command-callbacks commit-entries)]

@@ -1,14 +1,17 @@
-# fluree
+# fluree/raft
 
-A Clojure library designed to ... well, that part is up to you.
+Implementation of the raft protocol in Clojure.
+
+Pluggable components to handle message receiving and responses,
+state machine implementation, and other configurations.
 
 ## Usage
 
-FIXME
+
 
 ## License
 
-Copyright © 2018 FIXME
+Copyright © 2018 Fluree PBC
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.

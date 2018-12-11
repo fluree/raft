@@ -1,9 +1,6 @@
 (ns fluree.raft.leader
-  (:require [fluree.raft.log :as raft-log]
-            [clojure.core.async :as async]
-            [clojure.tools.logging :as log]))
-
-(declare send-append-entry)
+  (:require [clojure.core.async :as async]
+            [fluree.raft.log :as raft-log]))
 
 (defn is-leader?
   [raft-state]
@@ -34,6 +31,7 @@
        (drop (Math/floor (/ (count seq) 2)))
        (first)))
 
+
 (defn recalc-commit-index
   "Recalculates commit index and returns value given a server config map from raft. (:servers raft-state).
   Pulls all :match-index values and returns the maximum of the majority."
@@ -52,6 +50,37 @@
                     :leader nil
                     :voted-for nil
                     :timeout (async/timeout (generate-election-timeout raft-state))))
+
+
+(defn append-entries-callback
+  "Callback function called with response from your configured send-rpc-fn."
+  [event-channel server request-map response]
+  (async/put! event-channel [:append-entries-response {:server   server
+                                                       :request  request-map
+                                                       :response response}]))
+
+(defn send-append-entry
+  "Sends an append entry request to given server based on current state."
+  [raft-state server]
+  (let [{:keys [send-rpc-fn timeout-reset-chan]} (:config raft-state)
+        {:keys [servers term index log commit this-server]} raft-state
+        next-index     (get-in servers [server :next-index])
+        prev-log-index (max (dec next-index) 0)
+        prev-log-term  (if (= 0 prev-log-index)
+                         0
+                         (:term (raft-log/modified-nth log prev-log-index index)))
+        entries        (if (> next-index index)
+                         []
+                         (raft-log/sublog log next-index (inc index) index))
+        data           {:term           term
+                        :leader-id      this-server
+                        :prev-log-index prev-log-index
+                        :prev-log-term  prev-log-term
+                        :entries        entries
+                        :leader-commit  commit}
+        callback       (partial append-entries-callback timeout-reset-chan server data)]
+    (send-rpc-fn raft-state server :append-entries data callback)
+    raft-state))
 
 
 (defn append-entries-response-event
@@ -88,38 +117,6 @@
         (let [raft-state* (update-in raft-state [:servers server :next-index] dec)]
           (send-append-entry raft-state* server)
           raft-state*)))))
-
-
-(defn append-entries-callback
-  "Callback function called with response from your configured send-rpc-fn."
-  [event-channel server request-map response]
-  (async/put! event-channel [:append-entries-response {:server   server
-                                                       :request  request-map
-                                                       :response response}]))
-
-
-(defn send-append-entry
-  "Sends an append entry request to given server based on current state."
-  [raft-state server]
-  (let [{:keys [send-rpc-fn timeout-reset-chan]} (:config raft-state)
-        {:keys [servers term index log commit this-server]} raft-state
-        next-index     (get-in servers [server :next-index])
-        prev-log-index (max (dec next-index) 0)
-        prev-log-term  (if (= 0 prev-log-index)
-                         0
-                         (:term (raft-log/modified-nth log prev-log-index index)))
-        entries        (if (> next-index index)
-                         []
-                         (raft-log/sublog log next-index (inc index) index))
-        data           {:term           term
-                        :leader-id      this-server
-                        :prev-log-index prev-log-index
-                        :prev-log-term  prev-log-term
-                        :entries        entries
-                        :leader-commit  commit}
-        callback       (partial append-entries-callback timeout-reset-chan server data)]
-    (send-rpc-fn raft-state server :append-entries data callback)
-    raft-state))
 
 
 (defn send-append-entries
