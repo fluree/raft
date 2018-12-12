@@ -15,7 +15,8 @@
                 *assert*             true}
 
   :dependencies [[org.clojure/clojure "1.9.0"]
-                 [org.clojure/core.async "0.4.474"]]
+                 [org.clojure/core.async "0.4.474"]
+                 [com.taoensso/nippy "2.14.0"]]
 
   :profiles {:dev {:source-paths ["dev"]
                    :repl-options {:init-ns user}

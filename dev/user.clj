@@ -1,7 +1,9 @@
 (ns user
   (:require [clojure.core.async :as async]
             [clojure.tools.logging :as log]
-            [fluree.raft :as raft])
+            [fluree.raft :as raft]
+            [fluree.raft.log :as raft-log]
+            [clojure.java.io :as io])
   (:import (java.util UUID)))
 
 
@@ -62,7 +64,7 @@
     ;; for now a single response channel is created for each request, so we need to match up requests/responses
     (async/go (let [response (async/<! resp-chan)
                     [header data] response]
-                (log/warn (str this-server " - send rpc resp: "
+                #_(log/warn (str this-server " - send rpc resp: "
                                {:header   (select-keys header [:op :from :to])
                                 :data     data
                                 :response response}))
@@ -78,15 +80,11 @@
                           :election-timeout 6000
                           :broadcast-time   3000
                           :send-rpc-fn      send-rpc
+                          :persist-dir      (str "log/" (name server-id) "/")
                           :close-fn         (close-fn server-id)})]
 
     (monitor-incoming-rcp raft)
     raft))
-
-(defn new-command
-  [raft command callback]
-  (let [event-chan (get-in raft [:config :timeout-reset-chan])]
-    (async/put! event-chan [:new-command command callback])))
 
 
 (defn power-load
@@ -94,7 +92,7 @@
   [raft prefix quantity callback]
   (let [entries (map (fn [i] [:write (str prefix "_key_" i) [prefix i]]) (range quantity))]
     (doseq [entry entries]
-      (new-command raft entry callback))))
+      (raft/new-command raft entry callback))))
 
 
 (defn get-raft-state
@@ -102,6 +100,8 @@
   [raft callback]
   (let [event-chan (get-in raft [:config :timeout-reset-chan])]
     (async/put! event-chan [:raft-state nil callback])))
+
+
 
 (comment
 
@@ -117,11 +117,17 @@
   (get-raft-state b (fn [x] (clojure.pprint/pprint (dissoc x :config))))
   (get-raft-state c (fn [x] (clojure.pprint/pprint (dissoc x :config))))
 
-  (new-command b [:write "mykey" "myval"] (fn [x] (println "Result: " x)))
-  (new-command b [:read "mykey2"] (fn [x] (println "Result: " x)))
+  (raft/new-command b [:write "mykey" "myval"] (fn [x] (println "Result: " x)))
+  (raft/new-command b [:read "mykey"] (fn [x] (println "Result: " x)))
 
-  (power-load a "b" 1000)
-  (new-command b [:read "b_key_99"] (fn [x] (println "Result: " x)))
+  (power-load b "d" 1000 nil)
+  (raft/new-command b [:read "b_key_99"] (fn [x] (println "Result: " x)))
+
+
+  (raft-log/read-log-file (io/file (get-in a [:config :persist-dir]) "0.raft"))
+  (raft-log/read-log-file (io/file (get-in b [:config :persist-dir]) "0.raft"))
+  (raft-log/read-log-file (io/file (get-in c [:config :persist-dir]) "0.raft"))
 
   )
+
 

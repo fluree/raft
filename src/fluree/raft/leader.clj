@@ -45,6 +45,7 @@
 (defn become-follower
   "Transition from a leader to a follower"
   [raft-state new-term]
+  (raft-log/write-current-term (:log-file raft-state) new-term)
   (assoc raft-state :term new-term
                     :status :follower
                     :leader nil
@@ -63,21 +64,23 @@
   "Sends an append entry request to given server based on current state."
   [raft-state server]
   (let [{:keys [send-rpc-fn timeout-reset-chan]} (:config raft-state)
-        {:keys [servers term index log commit this-server]} raft-state
+        {:keys [servers term index commit this-server]} raft-state
         next-index     (get-in servers [server :next-index])
         prev-log-index (max (dec next-index) 0)
         prev-log-term  (if (= 0 prev-log-index)
                          0
-                         (:term (raft-log/modified-nth log prev-log-index index)))
+                         (raft-log/term-of-index (:log-file raft-state) prev-log-index))
         entries        (if (> next-index index)
                          []
-                         (raft-log/sublog log next-index (inc index) index))
+                         (raft-log/read-entry-range (:log-file raft-state) next-index index))
+
         data           {:term           term
                         :leader-id      this-server
                         :prev-log-index prev-log-index
                         :prev-log-term  prev-log-term
                         :entries        entries
                         :leader-commit  commit}
+        _ (when (not-empty entries) (println "--- SENDING ENTRIES: " server data))
         callback       (partial append-entries-callback timeout-reset-chan server data)]
     (send-rpc-fn raft-state server :append-entries data callback)
     raft-state))
@@ -194,22 +197,24 @@
   "Request votes for leadership from all followers."
   [raft-state]
   (let [{:keys [send-rpc-fn timeout-reset-chan]} (get raft-state :config)
-        this-server    (:this-server raft-state)
-        proposed-term  (inc (:term raft-state))
-        raft-state*    (-> raft-state
-                           (assoc :term proposed-term
-                                  :status :candidate        ;; register as candidate in state
-                                  :leader nil
-                                  :voted-for this-server)
-                           ;; register vote for self
-                           (assoc-in [:servers this-server :vote] [proposed-term true]))
+        this-server   (:this-server raft-state)
+        proposed-term (inc (:term raft-state))
+        _             (raft-log/write-current-term (:log-file raft-state) proposed-term)
+        _             (raft-log/write-voted-for (:log-file raft-state) proposed-term this-server)
+        raft-state*   (-> raft-state
+                          (assoc :term proposed-term
+                                 :status :candidate         ;; register as candidate in state
+                                 :leader nil
+                                 :voted-for this-server)
+                          ;; register vote for self
+                          (assoc-in [:servers this-server :vote] [proposed-term true]))
 
-        {:keys [log index term]} raft-state*
-        last-log-entry (first (raft-log/sublog log index (inc index) index))
-        request        {:term           term
-                        :candidate-id   this-server
-                        :last-log-index index
-                        :last-log-term  (or (:term last-log-entry) 0)}]
+        {:keys [index term]} raft-state*
+        last-log-term (raft-log/term-of-index (:log-file raft-state) index)
+        request       {:term           term
+                       :candidate-id   this-server
+                       :last-log-index index
+                       :last-log-term  (or last-log-term 0)}]
     (doseq [server (remote-servers raft-state*)]
       (let [callback (partial request-vote-callback timeout-reset-chan server request)]
         (send-rpc-fn raft-state* server :request-vote request callback)))

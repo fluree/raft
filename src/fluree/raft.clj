@@ -7,21 +7,6 @@
   (:import (java.util UUID)))
 
 
-(defn persist-term
-  "Persists a new term entry into log."
-  [raft term voted-for]
-  (let [persist-fn :TODO #_(config/persist-log-fn raft)]
-    (persist-fn :term {:term term :voted-for voted-for})))
-
-
-(defn persist-entries
-  "Persists a set of log entries"
-  [raft header entries]
-  (let [persist-fn :TODO #_(config/persist-log-fn raft)]
-    (persist-fn :entries {:header header :entries entries})))
-
-
-
 (defn default-handler
   [raft operation data callback]
   (let [event-chan (get-in raft [:config :timeout-reset-chan])]
@@ -39,25 +24,6 @@
   [snapshot]
   (reset! stored-snapshot snapshot))
 
-(def persisted-entries (atom []))
-
-(defn persist!
-  "Persist a log entry. Because we do :append-entries, snapshot, etc.
-  this is a two-tuple of first the type of log entry and then the entries itself.
-
-  entry-types include
-  :append-entries {:index-before i :entries [entries]}
-  :remove-entries [from-i to-i] (remove i and ever entry after it)
-  :snapshot {:index i :snapshot shapshot-data}"
-  [entry-type data]
-  ;; TODO - SNAPSHOT saving
-  (swap! persisted-entries conj [entry-type data]))
-
-
-(defn get-log
-  []
-  @persisted-entries)
-
 
 (defn invoke-rpc-handler
   [raft op data callback]
@@ -73,19 +39,6 @@
     (async/close! timeout-reset-chan)
     (when (fn? close-fn)
       (close-fn))))
-
-
-;; TODO - need to persist!!
-(defn write-file
-  [val path]
-  (try
-    (with-open [out (io/output-stream (io/file path))]
-      (.write out val))
-    (catch java.io.FileNotFoundException e
-      (io/make-parents (io/file path))
-      (with-open [out (io/output-stream (io/file path))]
-        (.write out val)))
-    (catch Exception e (throw e))))
 
 
 (defn request-vote-event
@@ -111,9 +64,12 @@
                            {:term proposed-term :vote-granted true})
         raft-state*      (if reject-vote?
                            raft-state
-                           (assoc raft-state :term proposed-term
-                                             :voted-for candidate-id
-                                             :status :follower))]
+                           (do
+                             (raft-log/write-current-term (:log-file raft-state) proposed-term)
+                             (raft-log/write-voted-for (:log-file raft-state) proposed-term candidate-id)
+                             (assoc raft-state :term proposed-term
+                                               :voted-for candidate-id
+                                               :status :follower)))]
     (callback response)
     raft-state*))
 
@@ -127,9 +83,9 @@
   [raft-state leader-commit]
   (if (= (:commit raft-state) leader-commit)
     raft-state                                              ;; no change
-    (let [{:keys [log index commit]} raft-state
+    (let [{:keys [commit]} raft-state
           state-machine-fn   (get-in raft-state [:config :state-machine])
-          commit-entries     (raft-log/sublog log (inc commit) (inc leader-commit) index)
+          commit-entries     (raft-log/read-entry-range (:log-file raft-state) (inc commit) leader-commit)
           command-callbacks  (:command-callbacks raft-state)
           command-callbacks* (reduce
                                (fn [callbacks entry-map]
@@ -150,36 +106,53 @@
   [raft-state args callback]
   (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
         proposed-term          (:term args)
-        {:keys [term index log commit]} raft-state
+        {:keys [term index]} raft-state
         term-at-prev-log-index (cond
                                  (= 0 prev-log-index) 0
 
                                  (<= prev-log-index index)
-                                 (:term (raft-log/modified-nth log prev-log-index index))
+                                 (raft-log/term-of-index (:log-file raft-state) prev-log-index)
 
                                  :else nil)
         old-term?              (< proposed-term term)
+        new-leader?            (> proposed-term term)
         logs-match?            (= prev-log-term term-at-prev-log-index)
         raft-state*            (cond-> (assoc raft-state :timeout (async/timeout (leader/generate-election-timeout raft-state))
                                                          :leader leader-id)
 
                                        ;; leader's term is newer, update leader info
-                                       (> proposed-term term)
-                                       (assoc :term proposed-term
-                                              :voted-for nil
-                                              :leader leader-id
-                                              :status :follower)
+                                       new-leader?
+                                       (#(do
+                                           (raft-log/write-current-term (:log-file %) proposed-term)
+                                           (assoc % :term proposed-term
+                                                    :voted-for nil
+                                                    :leader leader-id
+                                                    :status :follower)))
 
                                        ;; we have a log match at prev-log-index
                                        (and logs-match? (not-empty entries))
-                                       (assoc :log (raft-log/append log entries prev-log-index index) ;; append entries
-                                              :index (+ prev-log-index (count entries)))
+                                       (#(let [new-index (+ prev-log-index (count entries))]
+                                           (if (or (= index prev-log-index) new-leader?)
+
+                                             ;; new entries, so add. If new leader, possibly over-write existing entries
+                                             (raft-log/append (:log-file %) entries prev-log-index index)
+
+                                             ;; Possibly new entries and no leader change.
+                                             ;; At least some of these entries duplicate ones already received.
+                                             ;; Happens when round-trip response doesn't complete prior to new updates being sent
+                                             (let [new-entries-n (- new-index index)
+                                                   new-entries   (take-last new-entries-n entries)]
+                                               (when new-entries
+                                                 (raft-log/append (:log-file %) new-entries index index))))
+
+                                           (assoc % :index new-index)))
 
 
                                        ;; entry at prev-log-index doesn't match local log term, remove offending entries
                                        (not logs-match?)
-                                       (assoc :log (raft-log/sublog log 0 prev-log-index index) ;; remove offending entries
-                                              :index (dec prev-log-index))
+                                       (#(do
+                                           (raft-log/remove-entries (:log-file %) prev-log-index)
+                                           (assoc % :index (dec prev-log-index))))
 
                                        ;; Check if commit is newer and process into state machine if needed
                                        logs-match?
@@ -229,6 +202,28 @@
         (catch Exception e (log/error e) (throw e))))))
 
 
+(defn update-snapshot
+  "Called once a new snapshot is complete, updates snapshot data."
+  [raft-state data]
+  (let [{:keys [index]} data]
+    ;; need to start a new log
+    (assoc raft-state :snapshot index)
+
+    )
+
+  )
+
+
+(defn into-chan
+  "Conjoins all entries in channel to supplied collection."
+  [coll c]
+  (loop [acc coll]
+    (let [x (async/poll! c)]
+      (if (nil? x)
+        acc
+        (recur (conj acc x))))))
+
+
 (defn event-loop
   "Launches an event loop where all state changes to the raft state happen.
 
@@ -249,13 +244,14 @@
   - raft-state            - provides current state of raft to a callback function provided.
   - close                 - gracefully closes down raft"
   [raft-state]
-  (let [event-channel (get-in raft-state [:config :timeout-reset-chan])
-        this-server   (:this-server raft-state)]
+  (let [event-channel   (get-in raft-state [:config :timeout-reset-chan])
+        command-channel (get-in raft-state [:config :command-chan])
+        this-server     (:this-server raft-state)]
     (async/go-loop [raft-state (assoc raft-state
                                  :timeout (async/timeout
                                             (leader/generate-election-timeout raft-state)))]
       (let [timeout-chan (:timeout raft-state)
-            [event c] (async/alts! [timeout-chan event-channel])
+            [event c] (async/alts! [timeout-chan event-channel command-channel])
             [op data callback] event
             timeout?     (= c timeout-chan)]
         (cond
@@ -284,20 +280,34 @@
                     ;; append a new log entry, an ultimately command into state machine - only done by leader
                     :new-command
                     (if-not (leader/is-leader? raft-state)
-                      (safe-callback callback (ex-info "Server is not currently leader." {:operation :new-command
-                                                                                          :error     :raft/not-leader}))
-                      (let [id          (or (:id data) (str (UUID/randomUUID)))
-                            timeout     (or (:timeout data) (get-in raft-state [:config :default-command-timeout]))
-                            resp-chan   (async/promise-chan)
-                            new-index   (inc (:index raft-state))
-                            raft-state* (-> raft-state
-                                            (update :log conj {:term (:term raft-state) :entry data :id id})
-                                            (assoc :index new-index)
-                                            (assoc-in [:servers this-server :match-index] new-index) ;; match-index majority used for updating leader-commit
-                                            (assoc-in [:command-callbacks id] resp-chan))]
-                        ;; create a go-channel to monitor for response
-                        (command-response raft-state* id resp-chan timeout callback)
-                        ;; kick off an append-entries call
+                      ;; not leader
+                      (do
+                        (safe-callback callback (ex-info "Server is not currently leader." {:operation :new-command
+                                                                                            :error     :raft/not-leader}))
+                        raft-state)
+
+                      ;; we are leader - drain all commands so can be sent in batch
+                      (let [commands    (into-chan [event] command-channel)
+                            _ (log/info "^^^^ new-command count: " (count commands))
+                            raft-state* (loop [[command & r] commands
+                                               raft-state raft-state]
+                                          (if command
+                                            (let [[_ data callback] command
+                                                  id          (or (:id data) (str (UUID/randomUUID)))
+                                                  timeout     (or (:timeout data) (get-in raft-state [:config :default-command-timeout]))
+                                                  resp-chan   (async/promise-chan)
+                                                  new-index   (inc (:index raft-state))
+                                                  entry       {:term (:term raft-state) :entry data :id id}
+                                                  _           (raft-log/write-new-command (:log-file raft-state) new-index entry)
+                                                  raft-state* (-> raft-state
+                                                                  (assoc :index new-index)
+                                                                  (assoc-in [:servers this-server :match-index] new-index) ;; match-index majority used for updating leader-commit
+                                                                  (assoc-in [:command-callbacks id] resp-chan))]
+                                              ;; create a go-channel to monitor for response
+                                              (command-response raft-state* id resp-chan timeout callback)
+                                              ;; kick off an append-entries call
+                                              (recur r raft-state*))
+                                            raft-state))]
                         (leader/send-append-entries raft-state*)))
 
                     ;; a command timed out, remove from state
@@ -321,6 +331,11 @@
                     :request-vote-response
                     (leader/request-vote-response-event raft-state data)
 
+                    ;; when we kick off a snapshot process asynchronously, the callback will update
+                    ;; raft state that we have a new snapshot
+                    :update-snapshot
+                    (update-snapshot raft-state data)
+
                     :raft-state
                     (do (safe-callback callback raft-state)
                         raft-state)
@@ -336,6 +351,14 @@
                   (catch Exception e (throw (ex-info (str "Raft error processing command: " op) raft-state e))))]
             (when (not= :close op)
               (recur raft-state*))))))))
+
+
+(defn new-command
+  "Issues a new command to raft. Will return an error if we are not the current leader."
+  ([raft command] (new-command raft command nil))
+  ([raft command callback]
+   (let [command-chan (get-in raft [:config :command-chan])]
+     (async/put! command-chan [:new-command command callback]))))
 
 
 (defn default-kv-state-machine
@@ -377,8 +400,8 @@
   [config]
   (let [{:keys [this-server servers
                 election-timeout broadcast-time
-                persist-path
-                min-log snapshot-threshold
+                persist-dir
+                log-threshold snapshot-threshold
 
                 state-machine
 
@@ -388,8 +411,8 @@
                 close-fn]
          :or   {election-timeout        13000               ;; election-timeout, good range is 10ms->500ms
                 broadcast-time          4000                ;; heartbeat broadcast-time
-                persist-path            "tmp/raft/"         ;; directory to store state
-                min-log                 10                  ;; keep log at minimum this size, don't snapshot more than this
+                persist-dir             "tmp/raft/"         ;; directory to store state
+                log-threshold           10                  ;; log will rotate after >= this number of entries
                 snapshot-threshold      10                  ;; number of log entries to snapshot at minumum
                 rpc-handler-fn          default-handler
                 state-machine           (default-kv-state-machine (atom {}))
@@ -398,24 +421,24 @@
 
         raft-state {:config      (assoc config :election-timeout election-timeout
                                                :broadcast-time broadcast-time
-                                               :persist-path persist-path
+                                               :persist-dir persist-dir
                                                :rpc-handler-fn rpc-handler-fn
                                                :send-rpc-fn send-rpc-fn
-                                               :min-log min-log
+
+                                               :log-threshold log-threshold
                                                :snapshot-threshold snapshot-threshold
 
                                                :get-snapshot-fn get-snapshot
                                                :persist-snapshot-fn persist-snapshot
-                                               :persist-log-fn persist!
-                                               :get-log-fn get-log
                                                :state-machine state-machine
                                                :timeout-reset-chan (async/chan) ;; when val is put to chan, will reset timeouts
+                                               :command-chan (async/chan)
                                                :close close-fn
                                                :default-command-timeout default-command-timeout)
                     :this-server this-server
                     :status      nil                        ;; candidate, leader, follower
                     :leader      nil                        ;; current known leader
-
+                    :log-file    (io/file persist-dir "0.raft")
                     :log         []                         ;; latest log entries in memory
                     :term        0                          ;; latest term
                     :index       0                          ;; latest index
