@@ -288,7 +288,6 @@
 
                       ;; we are leader - drain all commands so can be sent in batch
                       (let [commands    (into-chan [event] command-channel)
-                            _ (log/info "^^^^ new-command count: " (count commands))
                             raft-state* (loop [[command & r] commands
                                                raft-state raft-state]
                                           (if command
@@ -396,6 +395,37 @@
              false))))
 
 
+(defn initialize-raft-state
+  [raft-state]
+  (let [log-dir         (get-in raft-state [:config :persist-dir])
+        latest-log      (raft-log/latest-log-index log-dir)
+        latest-log-file (io/file log-dir (str latest-log ".raft"))
+        log-entries     (try (raft-log/read-log-file latest-log-file)
+                             (catch java.io.FileNotFoundException _ nil))
+        raft-state*     (reduce
+                          (fn [state entry]
+                            (let [[index term entry-type data] entry]
+                              (cond
+                                (> index 0)
+                                (assoc state :index index :term term)
+
+                                (= :current-term entry-type)
+                                (assoc state :term term)
+
+                                (= :voted-for entry-type)
+                                (if (= term (:term state))
+                                  (assoc state :voted-for data)
+                                  state)
+
+                                (= :snapshot entry-type)
+                                (assoc state :snapshot data)
+
+                                (= :no-op entry-type)
+                                state)))
+                          raft-state log-entries)]
+    (assoc raft-state* :log-file latest-log-file)))
+
+
 (defn start
   [config]
   (let [{:keys [this-server servers
@@ -409,8 +439,8 @@
                 default-command-timeout
 
                 close-fn]
-         :or   {election-timeout        13000               ;; election-timeout, good range is 10ms->500ms
-                broadcast-time          4000                ;; heartbeat broadcast-time
+         :or   {election-timeout        500                 ;; election-timeout, good range is 10ms->500ms
+                broadcast-time          100                 ;; heartbeat broadcast-time
                 persist-dir             "tmp/raft/"         ;; directory to store state
                 log-threshold           10                  ;; log will rotate after >= this number of entries
                 snapshot-threshold      10                  ;; number of log entries to snapshot at minumum
@@ -419,38 +449,41 @@
                 default-command-timeout 4000
                 }} config
 
-        raft-state {:config      (assoc config :election-timeout election-timeout
-                                               :broadcast-time broadcast-time
-                                               :persist-dir persist-dir
-                                               :rpc-handler-fn rpc-handler-fn
-                                               :send-rpc-fn send-rpc-fn
+        config*     (assoc config :election-timeout election-timeout
+                                  :broadcast-time broadcast-time
+                                  :persist-dir persist-dir
+                                  :rpc-handler-fn rpc-handler-fn
+                                  :send-rpc-fn send-rpc-fn
 
-                                               :log-threshold log-threshold
-                                               :snapshot-threshold snapshot-threshold
+                                  :log-threshold log-threshold
+                                  :snapshot-threshold snapshot-threshold
 
-                                               :get-snapshot-fn get-snapshot
-                                               :persist-snapshot-fn persist-snapshot
-                                               :state-machine state-machine
-                                               :timeout-reset-chan (async/chan) ;; when val is put to chan, will reset timeouts
-                                               :command-chan (async/chan)
-                                               :close close-fn
-                                               :default-command-timeout default-command-timeout)
-                    :this-server this-server
-                    :status      nil                        ;; candidate, leader, follower
-                    :leader      nil                        ;; current known leader
-                    :log-file    (io/file persist-dir "0.raft")
-                    :log         []                         ;; latest log entries in memory
-                    :term        0                          ;; latest term
-                    :index       0                          ;; latest index
-                    :snapshot    0                          ;; index point of last snapshot
-                    :commit      0                          ;; commit point in index
-                    :voted-for   nil                        ;; for the :term specified above, who we voted for
+                                  :get-snapshot-fn get-snapshot
+                                  :persist-snapshot-fn persist-snapshot
+                                  :state-machine state-machine
+                                  :timeout-reset-chan (async/chan) ;; when val is put to chan, will reset timeouts
+                                  :command-chan (async/chan)
+                                  :close close-fn
+                                  :default-command-timeout default-command-timeout)
 
-                    ;; map of servers participating in consensus. server id is key, state of server is val
-                    :servers     (reduce #(assoc %1 %2 {:vote        nil
-                                                        :next-index  0
-                                                        :match-index 0}) {} servers)
+        raft-state  {:config      config*
+                     :this-server this-server
+                     :status      nil                       ;; candidate, leader, follower
+                     :leader      nil                       ;; current known leader
+                     :log-file    (io/file persist-dir "0.raft")
+                     :log         []                        ;; latest log entries in memory
+                     :term        0                         ;; latest term
+                     :index       0                         ;; latest index
+                     :snapshot    0                         ;; index point of last snapshot
+                     :commit      0                         ;; commit point in index
+                     :voted-for   nil                       ;; for the :term specified above, who we voted for
 
-                    }]
-    (event-loop raft-state)
-    raft-state))
+                     ;; map of servers participating in consensus. server id is key, state of server is val
+                     :servers     (reduce #(assoc %1 %2 {:vote        nil
+                                                         :next-index  0
+                                                         :match-index 0}) {} servers)
+
+                     }
+        raft-state* (initialize-raft-state raft-state)]
+    (event-loop raft-state*)
+    raft-state*))

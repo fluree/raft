@@ -80,7 +80,6 @@
                         :prev-log-term  prev-log-term
                         :entries        entries
                         :leader-commit  commit}
-        _ (when (not-empty entries) (println "--- SENDING ENTRIES: " server data))
         callback       (partial append-entries-callback timeout-reset-chan server data)]
     (send-rpc-fn raft-state server :append-entries data callback)
     raft-state))

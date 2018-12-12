@@ -60,7 +60,7 @@
 (defn write-current-term
   "Record latest term we've seen to persistent log."
   [file term]
-  (write-entry file (:current-term entry-types) term nil))
+  (write-entry file (:current-term entry-types) term term))
 
 
 (defn write-voted-for
@@ -222,6 +222,24 @@
       (remove-entries file (inc after-index))
       ;; perform append
       (append file entries after-index after-index))))
+
+
+(defn all-log-indexes
+  "Returns all index file names present in provided raft log path."
+  [path]
+  (->> (file-seq (clojure.java.io/file path))
+       (filter #(.isFile ^java.io.File %))
+       (keep #(when-let [idx-str (re-find #"^[0-9]+" (.getName ^java.io.File %))]
+                (Long/parseLong idx-str)))))
+
+
+(defn latest-log-index
+  "Returns the most recent (largest) log index point."
+  [path]
+  (let [all-idx-logs (all-log-indexes path)]
+    (if (empty? all-idx-logs)
+      0
+      (apply max all-idx-logs))))
 
 
 
