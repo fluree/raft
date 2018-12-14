@@ -3,26 +3,16 @@
             [clojure.java.io :as io]
             [fluree.raft.log :as raft-log]
             [fluree.raft.leader :as leader]
-            [clojure.tools.logging :as log])
-  (:import (java.util UUID)))
+            [clojure.tools.logging :as log]
+            [taoensso.nippy :as nippy])
+  (:import (java.util UUID)
+           (java.io DataOutputStream)))
 
 
 (defn default-handler
   [raft operation data callback]
   (let [event-chan (get-in raft [:config :timeout-reset-chan])]
     (async/put! event-chan [operation data callback])))
-
-
-(def stored-snapshot (atom nil))
-
-(defn get-snapshot
-  []
-  @stored-snapshot)
-
-
-(defn persist-snapshot
-  [snapshot]
-  (reset! stored-snapshot snapshot))
 
 
 (defn invoke-rpc-handler
@@ -76,30 +66,41 @@
 
 (defn update-commits
   "Process new commits if leader-commit is updated.
-
   Put commit results on callback async channel if present.
-
   Update local raft state :commit"
   [raft-state leader-commit]
   (if (= (:commit raft-state) leader-commit)
     raft-state                                              ;; no change
-    (let [{:keys [commit]} raft-state
-          state-machine-fn   (get-in raft-state [:config :state-machine])
-          commit-entries     (raft-log/read-entry-range (:log-file raft-state) (inc commit) leader-commit)
-          command-callbacks  (:command-callbacks raft-state)
-          command-callbacks* (reduce
-                               (fn [callbacks entry-map]
-                                 (let [resp (state-machine-fn (:entry entry-map))]
-                                   (if-let [callback-chan (get callbacks (:id entry-map))]
-                                     (do
-                                       (if (nil? resp)
-                                         (async/close! callback-chan)
-                                         (async/put! callback-chan resp))
-                                       (dissoc callbacks (:id entry-map)))
-                                     callbacks)))
-                               command-callbacks commit-entries)]
-      (assoc raft-state :command-callbacks command-callbacks*
-                        :commit leader-commit))))
+    (let [{:keys [commit snapshot-index config snapshot-pending]} raft-state
+          {:keys [state-machine snapshot-threshold snapshot-write]} config
+          commit-entries    (raft-log/read-entry-range (:log-file raft-state) (inc commit) leader-commit)
+          command-callbacks (:command-callbacks raft-state)
+          trigger-snapshot? (and (>= commit (+ snapshot-index snapshot-threshold))
+                                 (not snapshot-pending))
+          snapshot-pending  (if trigger-snapshot?
+                              commit
+                              snapshot-pending)]
+      ;; trigger new snapshot if necessary before applying new commits
+      ;; a well behaved snapshot writer will perform this asynchronously, so
+      ;; we can continue to move forward.
+      (when trigger-snapshot?
+        (let [event-chan        (get-in raft-state [:config :timeout-reset-chan])
+              term-at-commit    (raft-log/term-of-index (:log-file raft-state) commit)
+              snapshot-callback (fn [& _] (async/put! event-chan [:snapshot [commit term-at-commit]]))]
+          (snapshot-write commit snapshot-callback)))
+      (assoc raft-state :commit leader-commit
+                        :snapshot-pending snapshot-pending
+                        :command-callbacks (reduce
+                                             (fn [callbacks entry-map]
+                                               (let [resp (state-machine (:entry entry-map))]
+                                                 (if-let [callback-chan (get callbacks (:id entry-map))]
+                                                   (do
+                                                     (if (nil? resp)
+                                                       (async/close! callback-chan)
+                                                       (async/put! callback-chan resp))
+                                                     (dissoc callbacks (:id entry-map)))
+                                                   callbacks)))
+                                             command-callbacks commit-entries)))))
 
 
 (defn append-entries-event
@@ -202,26 +203,62 @@
         (catch Exception e (log/error e) (throw e))))))
 
 
-(defn update-snapshot
-  "Called once a new snapshot is complete, updates snapshot data."
-  [raft-state data]
-  (let [{:keys [index]} data]
-    ;; need to start a new log
-    (assoc raft-state :snapshot index)
-
-    )
-
-  )
-
-
 (defn into-chan
-  "Conjoins all entries in channel to supplied collection."
+  "Conjoins all available entries in channel to supplied collection."
   [coll c]
   (loop [acc coll]
     (let [x (async/poll! c)]
       (if (nil? x)
         acc
         (recur (conj acc x))))))
+
+
+(defn install-snapshot
+  "Installs a new snapshot, does so in parts.
+  Parts should always come serially, so can just append new part.
+  Once complete, it is registered, until then it is not referenced and therefore will not be accessed by raft.
+
+  It is possible a new leader can be elected prior to finishing the last leader's snapshot. If so, we will be
+  receiving a new snapshot from the new leader, and can abandon this effort. Because of this, it cannot be guaranteed
+  that historical snapshots on disk are complete - only trust the one official registered snapshot in the raft-state.
+
+  It is a good practice when receiving part 1 to delete any existing file if exists. It is possible two leaders have same
+  snapshot index and one interrupted process can exist while a new one starts, inadvertently concatenating two snapshots.
+  "
+  [raft-state snapshot-map callback]
+  (let [{:keys [snapshot-term snapshot-index snapshot-part snapshot-parts]} snapshot-map
+        {:keys [term index snapshot-install snapshot-reify]} raft-state
+        proposed-term (:term snapshot-map)
+        old-term?     (< proposed-term term)
+        old-snapshot? (>= index snapshot-index)             ;; a stale/old request, we perhaps have a new leader and newer index already
+        done?         (= snapshot-part snapshot-parts)
+        raft-state*   (if (and done? (not old-snapshot?))
+                        (assoc raft-state :index snapshot-index
+                                          :commit snapshot-index
+                                          :snapshot-index snapshot-index
+                                          :snapshot-term snapshot-term)
+                        raft-state)
+        response      (if (or old-term? done? old-snapshot?)
+                        {:term term :next-part nil}
+                        {:term term :next-part (inc snapshot-part)})]
+    ;; wait until everything is durably stored
+    (when-not (or old-term? old-snapshot?)
+      (snapshot-install snapshot-map))
+
+    (when (and done? (not old-snapshot?))
+      ;; reify new snapshot - if this fails we want to crash and not write a record of this new snapshot to log
+      (snapshot-reify snapshot-index)
+
+      ;; write record of snapshot into log, reify succeeded
+      (raft-log/write-snapshot (:log-file raft-state) snapshot-index snapshot-term))
+
+    ;; send response back to leader
+    (callback response)
+
+    ;; rotate and clean up logs if done with snapshot
+    (if (and done? (not old-snapshot?))
+      (raft-log/rotate-log raft-state*)
+      raft-state*)))
 
 
 (defn event-loop
@@ -332,8 +369,24 @@
 
                     ;; when we kick off a snapshot process asynchronously, the callback will update
                     ;; raft state that we have a new snapshot
-                    :update-snapshot
-                    (update-snapshot raft-state data)
+                    :snapshot
+                    (let [[snapshot-index snapshot-term] data]
+                      (if (<= snapshot-index (:snapshot-index raft-state))
+                        ;; in case callback triggered multiple times, ignore
+                        raft-state
+                        (-> raft-state
+                            (assoc :snapshot-index snapshot-index
+                                   :snapshot-term snapshot-term
+                                   :snapshot-pending nil)
+                            (raft-log/rotate-log))))
+
+                    ;; received by follower once at end of log to install leader's latest snapshot
+                    :install-snapshot
+                    (install-snapshot raft-state data callback)
+
+                    ;; response received by leader to an install-snapshot event
+                    :install-snapshot-response
+                    (leader/install-snapshot-response-event raft-state data)
 
                     :raft-state
                     (do (safe-callback callback raft-state)
@@ -347,7 +400,8 @@
                                                                          :error     :raft/shutdown})))
                       (safe-callback callback :raft-closed)
                       raft-state))
-                  (catch Exception e (throw (ex-info (str "Raft error processing command: " op) raft-state e))))]
+                  (catch Exception e (throw (ex-info (str "Raft error processing command: " op) {:data       data
+                                                                                                 :raft-state raft-state} e))))]
             (when (not= :close op)
               (recur raft-state*))))))))
 
@@ -394,12 +448,78 @@
                (= v (get new-state k)))
              false))))
 
+(defn default-snapshot-installer
+  "Installs a new snapshot being sent from a different server.
+  Blocking until write succeeds. An error will stop RAFT entirely.
+
+  If snapshot-part = 1, should first delete any existing file if it exists (possible to have historic partial snapshot lingering).
+
+  As soon as final part write succeeds, can safely garbage collect any old snapshots on disk except the most recent one."
+  [path]
+  (fn [snapshot-map]
+    (let [{:keys [leader-id snapshot-term snapshot-index snapshot-part snapshot-parts snapshot-data]} snapshot-map
+          file (io/file path (str snapshot-index ".snapshot"))]
+
+      (when (= 1 snapshot-part)
+        ;; delete any old file if exists
+        (io/make-parents file)
+        (io/delete-file file true))
+
+      (with-open [out (io/output-stream file :append true)]
+        (.write out ^bytes snapshot-data)))))
+
+
+(defn default-snapshot-reify
+  "Reifies a snapshot, should populate whatever data is needed into an initialized state machine
+  that is used for raft.
+
+  Called with snapshot-id to reify, which corresponds to the commit index the snapshot was taken.
+  Should throw if snapshot not found, or unable to parse. This will stop raft."
+  [path state-atom]
+  (fn [snapshot-id]
+    (let [file  (io/file path (str snapshot-id ".snapshot"))
+          state (nippy/thaw-from-file file)]
+      (reset! state-atom state))))
+
+
+(defn default-snapshot-writer
+  "Blocking until write succeeds. An error will stop RAFT entirely."
+  [path state-atom]
+  (fn [id callback]
+    (let [state @state-atom
+          file  (io/file path (str id ".snapshot"))]
+      (io/make-parents file)
+      (future
+        (nippy/freeze-to-file file state)
+        (callback)))))
+
+
+(defn default-snapshot-reader
+  "Will be called with two arguments, snapshot id and part number.
+  Initial call will be for part 1, and subsequent calls, if necessary,
+  will be for each successive part.
+
+  Must return a snapshot with the following fields
+  :parts - how many parts total
+  :data - snapshot data
+
+  If multiple parts are returned, additional requests for each part will be
+  requested. A snapshot should be broken into multiple parts if it is larger than
+  the amount of data you want to push across the network at once."
+  [path]
+  (fn [id part]
+    ;; in this example we do everything in one part, regardless of snapshot size
+    (let [file (io/file path (str id ".snapshot"))
+          data (nippy/thaw-from-file file)]
+      {:parts 1
+       :data  data})))
+
 
 (defn initialize-raft-state
   [raft-state]
-  (let [log-dir         (get-in raft-state [:config :persist-dir])
-        latest-log      (raft-log/latest-log-index log-dir)
-        latest-log-file (io/file log-dir (str latest-log ".raft"))
+  (let [{:keys [persist-dir snapshot-reify]} (:config raft-state)
+        latest-log      (raft-log/latest-log-index persist-dir)
+        latest-log-file (io/file persist-dir (str latest-log ".raft"))
         log-entries     (try (raft-log/read-log-file latest-log-file)
                              (catch java.io.FileNotFoundException _ nil))
         raft-state*     (reduce
@@ -418,22 +538,32 @@
                                   state)
 
                                 (= :snapshot entry-type)
-                                (assoc state :snapshot data)
+                                (assoc state :snapshot-index data
+                                             :snapshot-term term)
 
                                 (= :no-op entry-type)
                                 state)))
-                          raft-state log-entries)]
-    (assoc raft-state* :log-file latest-log-file)))
+                          raft-state log-entries)
+        snapshot-index  (when (pos-int? (:snapshot-index raft-state*))
+                          (:snapshot-index raft-state*))]
+    ;; if a snapshot exists, reify it into the state-machine
+    (when snapshot-index
+      (snapshot-reify snapshot-index))
+
+    (cond-> (assoc raft-state* :log-file latest-log-file)
+            snapshot-index (assoc :index (max (:index raft-state*) snapshot-index)
+                                  :commit snapshot-index))))
 
 
 (defn start
   [config]
-  (let [{:keys [this-server servers
+  (let [state-machine-atom (atom {})
+        persist-dir        (or (:persist-dir config) "raftlog/")
+        {:keys [this-server servers
                 election-timeout broadcast-time
-                persist-dir
-                log-threshold snapshot-threshold
+                retain-logs snapshot-threshold
 
-                state-machine
+                state-machine snapshot-write snapshot-read snapshot-install snapshot-reify
 
                 send-rpc-fn rpc-handler-fn
                 default-command-timeout
@@ -441,49 +571,56 @@
                 close-fn]
          :or   {election-timeout        500                 ;; election-timeout, good range is 10ms->500ms
                 broadcast-time          100                 ;; heartbeat broadcast-time
-                persist-dir             "tmp/raft/"         ;; directory to store state
-                log-threshold           10                  ;; log will rotate after >= this number of entries
-                snapshot-threshold      10                  ;; number of log entries to snapshot at minumum
+                retain-logs             10                  ;; number of historical log files to retain
+                snapshot-threshold      10                  ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 rpc-handler-fn          default-handler
-                state-machine           (default-kv-state-machine (atom {}))
+                state-machine           (default-kv-state-machine state-machine-atom)
+                snapshot-write          (default-snapshot-writer (str persist-dir "snapshots/") state-machine-atom)
+                snapshot-reify          (default-snapshot-reify (str persist-dir "snapshots/") state-machine-atom)
+                snapshot-read           (default-snapshot-reader (str persist-dir "snapshots/"))
+                snapshot-install        (default-snapshot-installer (str persist-dir "snapshots/"))
                 default-command-timeout 4000
                 }} config
 
-        config*     (assoc config :election-timeout election-timeout
-                                  :broadcast-time broadcast-time
-                                  :persist-dir persist-dir
-                                  :rpc-handler-fn rpc-handler-fn
-                                  :send-rpc-fn send-rpc-fn
+        config*            (assoc config :election-timeout election-timeout
+                                         :broadcast-time broadcast-time
+                                         :persist-dir persist-dir
+                                         :rpc-handler-fn rpc-handler-fn
+                                         :send-rpc-fn send-rpc-fn
 
-                                  :log-threshold log-threshold
-                                  :snapshot-threshold snapshot-threshold
+                                         :retain-logs retain-logs
 
-                                  :get-snapshot-fn get-snapshot
-                                  :persist-snapshot-fn persist-snapshot
-                                  :state-machine state-machine
-                                  :timeout-reset-chan (async/chan) ;; when val is put to chan, will reset timeouts
-                                  :command-chan (async/chan)
-                                  :close close-fn
-                                  :default-command-timeout default-command-timeout)
+                                         :snapshot-threshold snapshot-threshold
+                                         :state-machine state-machine
+                                         :snapshot-write snapshot-write
+                                         :snapshot-read snapshot-read
+                                         :snapshot-reify snapshot-reify
+                                         :snapshot-install snapshot-install
 
-        raft-state  {:config      config*
-                     :this-server this-server
-                     :status      nil                       ;; candidate, leader, follower
-                     :leader      nil                       ;; current known leader
-                     :log-file    (io/file persist-dir "0.raft")
-                     :log         []                        ;; latest log entries in memory
-                     :term        0                         ;; latest term
-                     :index       0                         ;; latest index
-                     :snapshot    0                         ;; index point of last snapshot
-                     :commit      0                         ;; commit point in index
-                     :voted-for   nil                       ;; for the :term specified above, who we voted for
+                                         :timeout-reset-chan (async/chan) ;; when val is put to chan, will reset timeouts
+                                         :command-chan (async/chan)
+                                         :close close-fn
+                                         :default-command-timeout default-command-timeout)
 
-                     ;; map of servers participating in consensus. server id is key, state of server is val
-                     :servers     (reduce #(assoc %1 %2 {:vote        nil
-                                                         :next-index  0
-                                                         :match-index 0}) {} servers)
+        raft-state         {:config           config*
+                            :this-server      this-server
+                            :status           nil           ;; candidate, leader, follower
+                            :leader           nil           ;; current known leader
+                            :log-file         (io/file persist-dir "0.raft")
+                            :term             0             ;; latest term
+                            :index            0             ;; latest index
+                            :snapshot-index   0             ;; index point of last snapshot
+                            :snapshot-term    0             ;; term of last snapshot
+                            :snapshot-pending nil           ;; holds pending commit if snapshot was requested
+                            :commit           0             ;; commit point in index
+                            :voted-for        nil           ;; for the :term specified above, who we voted for
 
-                     }
-        raft-state* (initialize-raft-state raft-state)]
+                            ;; map of servers participating in consensus. server id is key, state of server is val
+                            :servers          (reduce #(assoc %1 %2 {:vote        nil
+                                                                     :next-index  0
+                                                                     :match-index 0}) {} servers)
+
+                            }
+        raft-state*        (initialize-raft-state raft-state)]
     (event-loop raft-state*)
     raft-state*))

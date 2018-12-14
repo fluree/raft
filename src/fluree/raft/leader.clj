@@ -53,22 +53,20 @@
                     :timeout (async/timeout (generate-election-timeout raft-state))))
 
 
-(defn append-entries-callback
-  "Callback function called with response from your configured send-rpc-fn."
-  [event-channel server request-map response]
-  (async/put! event-channel [:append-entries-response {:server   server
-                                                       :request  request-map
-                                                       :response response}]))
-
-(defn send-append-entry
-  "Sends an append entry request to given server based on current state."
+(defn- send-append-entry*
   [raft-state server]
   (let [{:keys [send-rpc-fn timeout-reset-chan]} (:config raft-state)
-        {:keys [servers term index commit this-server]} raft-state
+        {:keys [servers term index commit this-server snapshot-index]} raft-state
         next-index     (get-in servers [server :next-index])
         prev-log-index (max (dec next-index) 0)
-        prev-log-term  (if (= 0 prev-log-index)
+        prev-log-term  (cond
+                         (= 0 prev-log-index)
                          0
+
+                         (= snapshot-index prev-log-index)
+                         (:snapshot-term raft-state)
+
+                         :else
                          (raft-log/term-of-index (:log-file raft-state) prev-log-index))
         entries        (if (> next-index index)
                          []
@@ -80,9 +78,95 @@
                         :prev-log-term  prev-log-term
                         :entries        entries
                         :leader-commit  commit}
-        callback       (partial append-entries-callback timeout-reset-chan server data)]
+        callback       (fn [response] (async/put! timeout-reset-chan
+                                                  [:append-entries-response {:server   server
+                                                                             :request  data
+                                                                             :response response}]))]
     (send-rpc-fn raft-state server :append-entries data callback)
     raft-state))
+
+
+(defn- send-install-snapshot
+  [raft-state server]
+  (let [{:keys [send-rpc-fn snapshot-read timeout-reset-chan]} (:config raft-state)
+        {:keys [term servers snapshot-index snapshot-term this-server]} raft-state
+        snapshot-index (or (get-in servers [server :snapshot-index])
+                           snapshot-index)
+        snapshot-term  (or (get-in servers [server :snapshot-term])
+                           snapshot-term)
+        snapshot-part  (inc (or (get-in servers [server :snapshot-part]) 0))
+        snapshot-data  (snapshot-read snapshot-index snapshot-part)
+
+        data           {:leader-id      this-server
+                        :term           term
+                        :snapshot-term  snapshot-term
+                        :snapshot-index snapshot-index
+                        :snapshot-part  snapshot-part
+                        :snapshot-parts (:parts snapshot-data)
+                        :snapshot-data  (:data snapshot-data)}
+        callback       (fn [response] (async/put! timeout-reset-chan
+                                                  [:install-snapshot-response {:server   server
+                                                                               :request  (dissoc data :data)
+                                                                               :response response}]))]
+    (send-rpc-fn raft-state server :install-snapshot data callback)
+    (update-in raft-state [servers server]
+               #(assoc % :snapshot-index snapshot-index
+                         :snapshot-term snapshot-term
+                         :snapshot-part snapshot-part))))
+
+
+(defn install-snapshot-response-event
+  "Response map contains two keys:
+  - term - current term of server - used to determine if we lost leadership
+  - next-part - next part of the snapshot we should send, or nil/0 if we should send no more."
+  [raft-state response-map]
+  (let [{:keys [server request response]} response-map
+        {:keys [index parts]} request
+        {:keys [term next-part]} response
+        done? (or (not (pos-int? next-part))
+                  (and (int? next-part) (> next-part parts)))]
+    (cond
+      ;; response has a newer term, go to follower status and reset election timeout
+      (> term (:term raft-state))
+      (become-follower raft-state term)
+
+      done?
+      (let [raft-state* (update-in raft-state [:servers server]
+                                   #(assoc % :next-index (inc index)
+                                             :match-index index
+                                             :snapshot-index nil
+                                             :snapshot-term nil
+                                             :snapshot-part nil))]
+        ;; now send an append-entry to catch up with latest logs
+        (send-append-entry* raft-state* server)
+        raft-state*)
+
+      ;; send next part of snapshot
+      (not done?)
+      (send-install-snapshot raft-state server))))
+
+
+(defn send-append-entry
+  "Sends an append entry request to given server based on current state.
+
+  If the next-index is <= a snapshot, instead starts sending a snapshot."
+  [raft-state server]
+  (let [{:keys [servers snapshot-index]} raft-state
+        next-index        (get-in servers [server :next-index])
+        sending-snapshot? (get-in servers [server :snapshot-index])
+        send-snapshot?    (<= next-index snapshot-index)]
+    (cond
+      ;; if currently sending a snapshot, wait until done before sending more append-entries
+      sending-snapshot?
+      raft-state
+
+      ;; we need to send a snapshot, reached end of our log
+      send-snapshot?
+      (send-install-snapshot raft-state server)
+
+      ;; standard case
+      :else
+      (send-append-entry* raft-state server))))
 
 
 (defn append-entries-response-event

@@ -74,14 +74,14 @@
 
 (defn start
   [server-id]
-
   (let [raft (raft/start {:this-server      server-id
                           :servers          servers
                           :election-timeout 100
                           :broadcast-time   10
                           :send-rpc-fn      send-rpc
                           :persist-dir      (str "log/" (name server-id) "/")
-                          :close-fn         (close-fn server-id)})]
+                          :close-fn         (close-fn server-id)
+                          :retain-logs      3})]
 
     (monitor-incoming-rcp raft)
     raft))
@@ -117,26 +117,20 @@
   (get-raft-state b (fn [x] (clojure.pprint/pprint (dissoc x :config))))
   (get-raft-state c (fn [x] (clojure.pprint/pprint (dissoc x :config))))
 
-  (raft/new-command a [:write "mykey" "myval"] (fn [x] (println "Result: " x)))
+  (raft/new-command a [:write "mykey4" "myval"] (fn [x] (println "Result: " x)))
   (raft/new-command b [:read "mykey"] (fn [x] (println "Result: " x)))
 
-  (power-load a "d" 100 nil)
+  (power-load a "g" 15 nil)
   (raft/new-command b [:read "b_key_99"] (fn [x] (println "Result: " x)))
 
 
-  (raft-log/read-log-file (io/file (get-in a [:config :persist-dir]) "0.raft"))
+  (raft-log/read-log-file (io/file (get-in a [:config :persist-dir]) "32.raft"))
   (raft-log/read-log-file (io/file (get-in b [:config :persist-dir]) "0.raft"))
   (raft-log/read-log-file (io/file (get-in c [:config :persist-dir]) "0.raft"))
-
-  (raft-log/all-log-indexes "log/d")
-  (raft-log/latest-log-index "log/d")
 
   a
   b
   c
-
-
-
 
   )
 

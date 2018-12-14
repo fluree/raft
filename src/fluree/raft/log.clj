@@ -1,50 +1,28 @@
 (ns fluree.raft.log
   (:require [clojure.java.io :as io]
             [taoensso.nippy :as nippy])
-  (:import (java.io FileNotFoundException DataInputStream RandomAccessFile)))
+  (:import (java.io FileNotFoundException DataInputStream RandomAccessFile File)))
 
 
 ;; if an index is not a positive integer (an append-entry), it is one of these special types:
 (def ^:const entry-types {:current-term -1                  ;; record of latest term we've seen
                           :voted-for    -2                  ;; record of votes
-                          :snapshot     -3
-                          :no-op        -4                  ;; used to clear out entries that are found to be incorrect
+                          :snapshot     -3                  ;; record of new snapshots
+                          :previous     -4                  ;; previous log - should be first log entry on new log files
+                          :no-op        -5                  ;; used to clear out entries that are found to be incorrect
                           })
 
 ;; reverse map of above
 (def ^:const entry-types' (into {} (map (fn [[k v]] [v k]) entry-types)))
 
-;
-;(defn modified-nth
-;  "Gets nth index from log, based on our current-index."
-;  [log index current-index]
-;  (let [offset (- current-index index)
-;        i      (dec (- (count log) offset))]
-;    (nth log i)))
-
-
-;(defn sublog
-;  "Like 'subvec' but works on log.
-;
-;  start (inclusive) and end (exclusive) are relative to the current-index of the raft log.
-;
-;  Any start that is earlier than what is in the current log will start at the beginning of the log."
-;  [log start end current-index]
-;  (let [start-offset (- current-index start)
-;        end-offset   (- current-index end)
-;        entries      (count log)
-;        start*       (max 0 (- (dec entries) start-offset))
-;        end*         (dec (- entries end-offset))]
-;    (subvec log start* end*)))
-
 
 (defn- write-entry
   "Writes entry to specified log"
-  [file index term entry]
+  [^File file index term entry]
   (try
-    (let [data (nippy/freeze entry)
-          len  (count data)
-          raf  (RandomAccessFile. file "rw")]
+    (let [^bytes data (nippy/freeze entry)
+          len         (count data)
+          raf         (RandomAccessFile. file "rw")]
       (doto raf
         (.seek (.length raf))
         (.writeInt len)
@@ -52,7 +30,7 @@
         (.writeLong term)
         (.write data)
         (.close)))
-    (catch Exception FileNotFoundException
+    (catch FileNotFoundException _
       (io/make-parents file)
       (write-entry file index term entry))))
 
@@ -68,6 +46,11 @@
   (write-entry file (:voted-for entry-types) term voted-for))
 
 
+(defn write-snapshot
+  [file snapshot-index snapshot-term]
+  (write-entry file (:snapshot entry-types) snapshot-term snapshot-index))
+
+
 (defn write-new-command
   "Writes a new command as leader."
   [file index entry]
@@ -76,7 +59,7 @@
 
 (defn read-log-file
   "Reads entire log file."
-  [file]
+  [^File file]
   (let [raf (RandomAccessFile. file "r")
         len (.length raf)]
     (loop [log []]
@@ -101,7 +84,7 @@
   long - index (or negative integer as per entry-types constant above)
   long - term
   x - entry bytes of previously specified size"
-  [file index]
+  [^File file index]
   (let [raf (RandomAccessFile. file "r")
         len (.length raf)]
     (loop []
@@ -133,35 +116,36 @@
 
 (defn read-entry-range
   "Reads index from start-index (inclusive) to end-index (inclusive)."
-  [file start-index end-index]
-  (let [raf (RandomAccessFile. file "r")
-        len (.length raf)]
-    (loop [acc []]
-      (if (= (.getFilePointer raf) len)
-        (do
-          (.close raf)
-          acc)
-        (let [next-bytes (.readInt raf)
-              idx        (.readLong raf)]
-          (cond
-            (<= start-index idx end-index)
-            (let [ba   (byte-array next-bytes)
-                  term (.readLong raf)]
-              (.read raf ba)
-              (recur (conj acc (nippy/thaw ba))))
+  ([^File file start-index] (read-entry-range file start-index (Long/MAX_VALUE)))
+  ([^File file start-index end-index]
+   (let [raf (RandomAccessFile. file "r")
+         len (.length raf)]
+     (loop [acc []]
+       (if (= (.getFilePointer raf) len)
+         (do
+           (.close raf)
+           acc)
+         (let [next-bytes (.readInt raf)
+               idx        (.readLong raf)]
+           (cond
+             (<= start-index idx end-index)
+             (let [ba   (byte-array next-bytes)
+                   term (.readLong raf)]
+               (.read raf ba)
+               (recur (conj acc (nippy/thaw ba))))
 
-            ;; we are past requested index, return acc
-            (> idx end-index)
-            (do
-              (.close raf)
-              acc)
+             ;; we are past requested index, return acc
+             (> idx end-index)
+             (do
+               (.close raf)
+               acc)
 
-            ;; not there yet, keep seeking
-            (< idx start-index)
-            (let [next-pointer (long (+ (.getFilePointer raf) 8 next-bytes))]
-              (do
-                (.seek raf next-pointer)
-                (recur acc)))))))))
+             ;; not there yet, keep seeking
+             (< idx start-index)
+             (let [next-pointer (long (+ (.getFilePointer raf) 8 next-bytes))]
+               (do
+                 (.seek raf next-pointer)
+                 (recur acc))))))))))
 
 
 (defn term-of-index
@@ -175,7 +159,7 @@
   "Removes entries from log from start-index (inclusive) to end.
 
   Changes index of removed entries to -1, so ignored by future reads."
-  [file start-index]
+  [^File file start-index]
   (let [raf (RandomAccessFile. file "rw")
         len (.length raf)]
     (loop []
@@ -224,13 +208,20 @@
       (append file entries after-index after-index))))
 
 
+(defn- return-log-id
+  "Takes java file and returns log id (typically same as start index)
+  from the file name as a long integer."
+  [^File file]
+  (when-let [match (re-find #"^([0-9]+)\.raft$" (.getName file))]
+    (Long/parseLong (second match))))
+
+
 (defn all-log-indexes
   "Returns all index file names present in provided raft log path."
   [path]
   (->> (file-seq (clojure.java.io/file path))
-       (filter #(.isFile ^java.io.File %))
-       (keep #(when-let [idx-str (re-find #"^[0-9]+" (.getName ^java.io.File %))]
-                (Long/parseLong idx-str)))))
+       (filter #(.isFile ^File %))
+       (keep return-log-id)))
 
 
 (defn latest-log-index
@@ -240,6 +231,41 @@
     (if (empty? all-idx-logs)
       0
       (apply max all-idx-logs))))
+
+
+(defn rotate-log
+  "Rotates current log"
+  [raft-state]
+  (let [{:keys [config snapshot-index snapshot-term voted-for term index log-file]} raft-state
+        {:keys [persist-dir retain-logs]} config
+        entries-post-snapshot (read-entry-range log-file (inc snapshot-index))
+        all-logs              (all-log-indexes persist-dir)
+        max-log-n             (when (not-empty all-logs) (apply max all-logs))
+        next-log-n            (if max-log-n
+                                (max snapshot-index (inc max-log-n))
+                                snapshot-index)
+        new-log               (io/file persist-dir (str next-log-n ".raft"))
+        purge-logs            (when (pos-int? retain-logs)
+                                (drop retain-logs (sort > all-logs)))]
+    ;; initialize base entries in log
+    (write-snapshot new-log snapshot-index snapshot-term)
+    (write-current-term new-log term)
+    (when voted-for
+      (write-voted-for new-log term voted-for))
+
+    ;; copy over all entries after latest snapshot
+    (loop [[entry & r] entries-post-snapshot
+           idx (inc snapshot-index)]
+      (when entry
+        (write-entry new-log idx (:term entry) entry)
+        (recur r (inc idx))))
+
+    ;; purge/remove old log files, if exist
+    (doseq [old-log purge-logs]
+      (let [file (io/file persist-dir (str old-log ".raft"))]
+        (io/delete-file file true)))
+
+    (assoc raft-state :log-file new-log)))
 
 
 
