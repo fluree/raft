@@ -107,9 +107,12 @@
   [raft-state args callback]
   (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
         proposed-term          (:term args)
-        {:keys [term index]} raft-state
+        {:keys [term index snapshot-index]} raft-state
         term-at-prev-log-index (cond
                                  (= 0 prev-log-index) 0
+
+                                 (= prev-log-index snapshot-index)
+                                 (:snapshot-term raft-state)
 
                                  (<= prev-log-index index)
                                  (raft-log/term-of-index (:log-file raft-state) prev-log-index)
@@ -227,7 +230,8 @@
   "
   [raft-state snapshot-map callback]
   (let [{:keys [snapshot-term snapshot-index snapshot-part snapshot-parts]} snapshot-map
-        {:keys [term index snapshot-install snapshot-reify]} raft-state
+        {:keys [term index config]} raft-state
+        {:keys [snapshot-install snapshot-reify]} config
         proposed-term (:term snapshot-map)
         old-term?     (< proposed-term term)
         old-snapshot? (>= index snapshot-index)             ;; a stale/old request, we perhaps have a new leader and newer index already
@@ -494,8 +498,9 @@
         (callback)))))
 
 
-(defn default-snapshot-reader
-  "Will be called with two arguments, snapshot id and part number.
+(defn default-snapshot-xfer
+  "Transfers snapshot from this server as leader, to a follower.
+  Will be called with two arguments, snapshot id and part number.
   Initial call will be for part 1, and subsequent calls, if necessary,
   will be for each successive part.
 
@@ -510,9 +515,12 @@
   (fn [id part]
     ;; in this example we do everything in one part, regardless of snapshot size
     (let [file (io/file path (str id ".snapshot"))
-          data (nippy/thaw-from-file file)]
+          ba   (byte-array (.length file))
+          is   (io/input-stream file)]
+      (.read is ba)
+      (.close is)
       {:parts 1
-       :data  data})))
+       :data  ba})))
 
 
 (defn initialize-raft-state
@@ -563,7 +571,7 @@
                 election-timeout broadcast-time
                 retain-logs snapshot-threshold
 
-                state-machine snapshot-write snapshot-read snapshot-install snapshot-reify
+                state-machine snapshot-write snapshot-xfer snapshot-install snapshot-reify
 
                 send-rpc-fn rpc-handler-fn
                 default-command-timeout
@@ -577,7 +585,7 @@
                 state-machine           (default-kv-state-machine state-machine-atom)
                 snapshot-write          (default-snapshot-writer (str persist-dir "snapshots/") state-machine-atom)
                 snapshot-reify          (default-snapshot-reify (str persist-dir "snapshots/") state-machine-atom)
-                snapshot-read           (default-snapshot-reader (str persist-dir "snapshots/"))
+                snapshot-xfer           (default-snapshot-xfer (str persist-dir "snapshots/"))
                 snapshot-install        (default-snapshot-installer (str persist-dir "snapshots/"))
                 default-command-timeout 4000
                 }} config
@@ -593,7 +601,7 @@
                                          :snapshot-threshold snapshot-threshold
                                          :state-machine state-machine
                                          :snapshot-write snapshot-write
-                                         :snapshot-read snapshot-read
+                                         :snapshot-xfer snapshot-xfer
                                          :snapshot-reify snapshot-reify
                                          :snapshot-install snapshot-install
 

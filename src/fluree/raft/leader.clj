@@ -88,14 +88,14 @@
 
 (defn- send-install-snapshot
   [raft-state server]
-  (let [{:keys [send-rpc-fn snapshot-read timeout-reset-chan]} (:config raft-state)
+  (let [{:keys [send-rpc-fn snapshot-xfer timeout-reset-chan]} (:config raft-state)
         {:keys [term servers snapshot-index snapshot-term this-server]} raft-state
         snapshot-index (or (get-in servers [server :snapshot-index])
                            snapshot-index)
         snapshot-term  (or (get-in servers [server :snapshot-term])
                            snapshot-term)
         snapshot-part  (inc (or (get-in servers [server :snapshot-part]) 0))
-        snapshot-data  (snapshot-read snapshot-index snapshot-part)
+        snapshot-data  (snapshot-xfer snapshot-index snapshot-part)
 
         data           {:leader-id      this-server
                         :term           term
@@ -121,10 +121,10 @@
   - next-part - next part of the snapshot we should send, or nil/0 if we should send no more."
   [raft-state response-map]
   (let [{:keys [server request response]} response-map
-        {:keys [index parts]} request
+        {:keys [snapshot-index snapshot-parts]} request
         {:keys [term next-part]} response
         done? (or (not (pos-int? next-part))
-                  (and (int? next-part) (> next-part parts)))]
+                  (and (int? next-part) (> next-part snapshot-parts)))]
     (cond
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state))
@@ -132,8 +132,8 @@
 
       done?
       (let [raft-state* (update-in raft-state [:servers server]
-                                   #(assoc % :next-index (inc index)
-                                             :match-index index
+                                   #(assoc % :next-index (inc snapshot-index)
+                                             :match-index snapshot-index
                                              :snapshot-index nil
                                              :snapshot-term nil
                                              :snapshot-part nil))]

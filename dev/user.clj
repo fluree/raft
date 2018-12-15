@@ -39,7 +39,7 @@
                                           :to (:from header)
                                           :from (:to header))
                 callback    (fn [x]
-                              (log/debug "OP Callback: " {:op op :request data :response x})
+                              (log/trace this-server "OP Callback: " {:op op :request data :response x})
                               (async/put! resp-chan [resp-header x]))]
             ;(log/info (str this-server " - incoming RPC: ") header data)
             (raft/invoke-rpc-handler raft op data callback)
