@@ -2,11 +2,12 @@
   (:require [clojure.core.async :as async]
             [fluree.raft.log :as raft-log]))
 
+
 (defn is-leader?
   [raft-state]
   (= :leader (:status raft-state)))
 
-(defn remote-servers
+(defn- remote-servers
   "Returns a list of all servers excluding this-server."
   [raft-state]
   (let [this-server (:this-server raft-state)]
@@ -22,7 +23,7 @@
     (+ election-timeout (rand-int election-timeout))))
 
 
-(defn minimum-majority
+(defn- minimum-majority
   "With a sequence of numbers, returns the highest number the majority is
   at or exceeding."
   [seq]
@@ -55,8 +56,8 @@
 
 (defn- send-append-entry*
   [raft-state server]
-  (let [{:keys [send-rpc-fn timeout-reset-chan]} (:config raft-state)
-        {:keys [servers term index commit this-server snapshot-index]} raft-state
+  (let [{:keys [servers term index commit this-server snapshot-index config]} raft-state
+        {:keys [send-rpc-fn event-chan]} config
         next-index     (get-in servers [server :next-index])
         prev-log-index (max (dec next-index) 0)
         prev-log-term  (cond
@@ -78,7 +79,7 @@
                         :prev-log-term  prev-log-term
                         :entries        entries
                         :leader-commit  commit}
-        callback       (fn [response] (async/put! timeout-reset-chan
+        callback       (fn [response] (async/put! event-chan
                                                   [:append-entries-response {:server   server
                                                                              :request  data
                                                                              :response response}]))]
@@ -88,8 +89,8 @@
 
 (defn- send-install-snapshot
   [raft-state server]
-  (let [{:keys [send-rpc-fn snapshot-xfer timeout-reset-chan]} (:config raft-state)
-        {:keys [term servers snapshot-index snapshot-term this-server]} raft-state
+  (let [{:keys [term servers snapshot-index snapshot-term this-server config]} raft-state
+        {:keys [send-rpc-fn snapshot-xfer event-chan]} config
         snapshot-index (or (get-in servers [server :snapshot-index])
                            snapshot-index)
         snapshot-term  (or (get-in servers [server :snapshot-term])
@@ -104,7 +105,7 @@
                         :snapshot-part  snapshot-part
                         :snapshot-parts (:parts snapshot-data)
                         :snapshot-data  (:data snapshot-data)}
-        callback       (fn [response] (async/put! timeout-reset-chan
+        callback       (fn [response] (async/put! event-chan
                                                   [:install-snapshot-response {:server   server
                                                                                :request  (dissoc data :data)
                                                                                :response response}]))]
@@ -146,7 +147,7 @@
       (send-install-snapshot raft-state server))))
 
 
-(defn send-append-entry
+(defn- send-append-entry
   "Sends an append entry request to given server based on current state.
 
   If the next-index is <= a snapshot, instead starts sending a snapshot."
@@ -215,7 +216,7 @@
     (assoc raft-state :timeout (async/timeout heartbeat-timeout))))
 
 
-(defn become-leader
+(defn- become-leader
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
   [raft-state]
   (let [this-server    (:this-server raft-state)
@@ -259,27 +260,17 @@
       (> term (:term raft-state*))
       (become-follower raft-state* term)
 
-
       (and majority? (not (is-leader? raft-state*)))
       (become-leader raft-state*)
-
 
       :else
       raft-state*)))
 
 
-(defn request-vote-callback
-  "Callback function for each rpc call to get a vote."
-  [event-channel server request-map response]
-  (async/put! event-channel [:request-vote-response {:server   server
-                                                     :request  request-map
-                                                     :response response}]))
-
-
 (defn request-votes
   "Request votes for leadership from all followers."
   [raft-state]
-  (let [{:keys [send-rpc-fn timeout-reset-chan]} (get raft-state :config)
+  (let [{:keys [send-rpc-fn event-chan]} (:config raft-state)
         this-server   (:this-server raft-state)
         proposed-term (inc (:term raft-state))
         _             (raft-log/write-current-term (:log-file raft-state) proposed-term)
@@ -291,7 +282,6 @@
                                  :voted-for this-server)
                           ;; register vote for self
                           (assoc-in [:servers this-server :vote] [proposed-term true]))
-
         {:keys [index term]} raft-state*
         last-log-term (raft-log/term-of-index (:log-file raft-state) index)
         request       {:term           term
@@ -299,7 +289,9 @@
                        :last-log-index index
                        :last-log-term  (or last-log-term 0)}]
     (doseq [server (remote-servers raft-state*)]
-      (let [callback (partial request-vote-callback timeout-reset-chan server request)]
+      (let [callback (fn [response]
+                       (async/put! event-chan
+                                   [:request-vote-response
+                                    {:server server :request request :response response}]))]
         (send-rpc-fn raft-state* server :request-vote request callback)))
     (assoc raft-state* :timeout (async/timeout (generate-election-timeout raft-state)))))
-

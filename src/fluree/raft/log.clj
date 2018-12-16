@@ -8,8 +8,7 @@
 (def ^:const entry-types {:current-term -1                  ;; record of latest term we've seen
                           :voted-for    -2                  ;; record of votes
                           :snapshot     -3                  ;; record of new snapshots
-                          :previous     -4                  ;; previous log - should be first log entry on new log files
-                          :no-op        -5                  ;; used to clear out entries that are found to be incorrect
+                          :no-op        -4                  ;; used to clear out entries that are found to be incorrect
                           })
 
 ;; reverse map of above
@@ -266,34 +265,3 @@
         (io/delete-file file true)))
 
     (assoc raft-state :log-file new-log)))
-
-
-
-
-
-(comment
-
-  (read-entry 11)
-
-  (def logfile (io/file "tmp/" "log2.raft"))
-
-  (write-entry logfile 4 2 [:a :a 4])
-  (write-entry logfile 5 2 [:a :b 5])
-  (write-entry logfile 6 2 [:a :c 6])
-  (write-entry logfile (:voted-for entry-types) 2 :server-a)
-  (write-entry logfile 7 2 [:a :d 7])
-
-  (.length (clojure.java.io/file logfile))
-  (.length (RandomAccessFile. logfile "r"))
-
-  (read-log-file logfile)
-
-  (read-entry logfile 6)
-
-  (read-entry-range logfile 4 10)
-
-  (remove-entries logfile 6)
-
-  )
-
-
