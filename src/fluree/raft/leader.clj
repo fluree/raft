@@ -219,18 +219,20 @@
 (defn- become-leader
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
   [raft-state]
-  (let [this-server    (:this-server raft-state)
+  (let [{:keys [this-server index servers]} raft-state
         broadcast-time (get-in raft-state [:config :broadcast-time])
-        next-index     (inc (:index raft-state))
-        servers        (reduce-kv
-                         (fn [acc server server-status]
-                           (assoc acc server (assoc server-status :next-index next-index
-                                                                  :match-index 0)))
-                         {}
-                         (:servers raft-state))
+        next-index     (inc index)
+        server-ids     (keys servers)
+        servers*       (reduce (fn [servers server-id]
+                                 (-> servers
+                                     (assoc-in [server-id :next-index] next-index)
+                                     (assoc-in [server-id :match-index] (if (= server-id this-server)
+                                                                          index ;; if this-server, set initial match-index to current index
+                                                                          0))))
+                               servers server-ids)
         raft-state*    (assoc raft-state :status :leader
                                          :leader this-server
-                                         :servers servers
+                                         :servers servers*
                                          :timeout (async/timeout broadcast-time))]
     ;; send an initial append-entries to make sure everyone knows we are the leader
     (send-append-entries raft-state*)))

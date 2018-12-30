@@ -187,7 +187,6 @@
               (recur))))))))
 
 
-
 (defn append
   "Append entries to log starting after-index relative to current-index."
   [file entries after-index current-index]

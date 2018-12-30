@@ -54,8 +54,11 @@
   [raft-state args callback]
   (let [{:keys [candidate-id last-log-index last-log-term]} args
         proposed-term    (:term args)
-        {:keys [index term log voted-for]} raft-state
-        my-last-log-term (or (:term (peek log)) 0)
+        {:keys [index term log-file voted-for]} raft-state
+        my-last-log-term (if (= 0 index)
+                           0
+                           (raft-log/term-of-index log-file index))
+
         reject-vote?     (or (< proposed-term term)         ;; request is for an older term
                              (and (= proposed-term term)    ;; make sure we haven't already voted for someone in this term
                                   (not (nil? voted-for)))
@@ -140,6 +143,9 @@
                                        ;; leader's term is newer, update leader info
                                        new-leader?
                                        (#(do
+                                           (when (> index prev-log-index)
+                                             ;; it is possible we have log entries after the leader's latest, remove them
+                                             (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
                                            (raft-log/write-current-term (:log-file %) proposed-term)
                                            (assoc % :term proposed-term
                                                     :voted-for nil
@@ -478,13 +484,16 @@
   (let [{:keys [this-server servers election-timeout broadcast-time
                 retain-logs snapshot-threshold persist-dir state-machine
                 snapshot-write snapshot-xfer snapshot-install snapshot-reify
-                send-rpc-fn default-command-timeout close-fn]
+                send-rpc-fn default-command-timeout close-fn
+                event-chan command-chan]
          :or   {election-timeout        500                 ;; election-timeout, good range is 10ms->500ms
                 broadcast-time          100                 ;; heartbeat broadcast-time
                 retain-logs             10                  ;; number of historical log files to retain
                 snapshot-threshold      10                  ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 default-command-timeout 4000
                 persist-dir             "raftlog/"
+                event-chan              (async/chan)
+                command-chan            (async/chan)
                 }} config
         _           (assert (fn? state-machine))
         _           (assert (fn? snapshot-write))
@@ -503,9 +512,8 @@
                                   :snapshot-xfer snapshot-xfer
                                   :snapshot-reify snapshot-reify
                                   :snapshot-install snapshot-install
-
-                                  :event-chan (async/chan)  ;; when val is put to chan, will reset timeouts
-                                  :command-chan (async/chan)
+                                  :event-chan event-chan
+                                  :command-chan command-chan
                                   :close close-fn
                                   :default-command-timeout default-command-timeout)
 
