@@ -196,6 +196,8 @@
 
   Changes index of removed entries to -1, so ignored by future reads."
   [^File file start-index]
+  ;; as a precaution, any time we remove entries clear the cache
+  (clear-index->term-cache)
   (let [raf (RandomAccessFile. file "rw")
         len (.length raf)]
     (loop []

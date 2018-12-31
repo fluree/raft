@@ -47,7 +47,6 @@
   "Transition from a leader to a follower"
   [raft-state new-term new-leader-id]
   (raft-log/write-current-term (:log-file raft-state) new-term)
-  (raft-log/clear-index->term-cache)                        ;; clear index->term cache, as existing entries may no longer be valid with new leader
   (assoc raft-state :term new-term
                     :status :follower
                     :leader new-leader-id

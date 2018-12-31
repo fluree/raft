@@ -164,6 +164,9 @@
                                                (when new-entries
                                                  (raft-log/append (:log-file %) new-entries index index))))
 
+                                           ;; as an optimization, we will cache last entry as it will likely be requested next
+                                           (raft-log/assoc-index->term-cache new-index (:term (last entries)))
+
                                            (assoc % :index new-index)))
 
 
