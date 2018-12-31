@@ -147,11 +147,48 @@
                  (recur acc))))))))))
 
 
-(defn term-of-index
+(def ^:private index->term-cache (atom {}))
+(def ^{:private true :const true} cache-size 10)
+
+
+(defn clear-index->term-cache
+  "Clears cache"
+  []
+  (reset! index->term-cache {}))
+
+
+(defn assoc-index->term-cache
+  "Implements a simple fifo cache."
+  [index term]
+  (swap! index->term-cache
+         (fn [x]
+           (let [x' (assoc x index {:val term :instant (System/currentTimeMillis)})]
+             (if (> (count x') cache-size)
+               (->> x'
+                    (sort-by #(-> % val :instant) >)
+                    (take cache-size)
+                    (into {}))
+               x'))))
+  term)
+
+(defn get-index->term-cache
+  [index]
+  (get-in @index->term-cache [index :val]))
+
+
+(defn index->term*
   "Returns term of specified index number."
   [file index]
   (-> (read-entry file index)
       :term))
+
+
+(defn index->term
+  "Returns term of specified index number."
+  [file index]
+  (or (get-index->term-cache index)
+      (assoc-index->term-cache
+        index (index->term* file index))))
 
 
 (defn remove-entries

@@ -57,7 +57,7 @@
         {:keys [index term log-file voted-for]} raft-state
         my-last-log-term (if (= 0 index)
                            0
-                           (raft-log/term-of-index log-file index))
+                           (raft-log/index->term log-file index))
 
         reject-vote?     (or (< proposed-term term)         ;; request is for an older term
                              (and (= proposed-term term)    ;; make sure we haven't already voted for someone in this term
@@ -101,7 +101,7 @@
       ;; a well behaved snapshot writer will perform this asynchronously, so
       ;; we can continue to move forward.
       (when trigger-snapshot?
-        (let [term-at-commit    (raft-log/term-of-index (:log-file raft-state) commit)
+        (let [term-at-commit    (raft-log/index->term (:log-file raft-state) commit)
               snapshot-callback (fn [& _] (async/put! (event-chan raft-state) [:snapshot [commit term-at-commit]]))]
           (snapshot-write commit snapshot-callback)))
       (assoc raft-state :commit leader-commit
@@ -131,7 +131,7 @@
                                  (:snapshot-term raft-state)
 
                                  (<= prev-log-index index)
-                                 (raft-log/term-of-index (:log-file raft-state) prev-log-index)
+                                 (raft-log/index->term (:log-file raft-state) prev-log-index)
 
                                  :else nil)
         old-term?              (< proposed-term term)
@@ -146,11 +146,7 @@
                                            (when (> index prev-log-index)
                                              ;; it is possible we have log entries after the leader's latest, remove them
                                              (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
-                                           (raft-log/write-current-term (:log-file %) proposed-term)
-                                           (assoc % :term proposed-term
-                                                    :voted-for nil
-                                                    :leader leader-id
-                                                    :status :follower)))
+                                           (leader/become-follower % proposed-term leader-id)))
 
                                        ;; we have a log match at prev-log-index
                                        (and logs-match? (not-empty entries))

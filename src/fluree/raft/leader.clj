@@ -45,11 +45,12 @@
 
 (defn become-follower
   "Transition from a leader to a follower"
-  [raft-state new-term]
+  [raft-state new-term new-leader-id]
   (raft-log/write-current-term (:log-file raft-state) new-term)
+  (raft-log/clear-index->term-cache)                        ;; clear index->term cache, as existing entries may no longer be valid with new leader
   (assoc raft-state :term new-term
                     :status :follower
-                    :leader nil
+                    :leader new-leader-id
                     :voted-for nil
                     :timeout (async/timeout (generate-election-timeout raft-state))))
 
@@ -68,7 +69,7 @@
                          (:snapshot-term raft-state)
 
                          :else
-                         (raft-log/term-of-index (:log-file raft-state) prev-log-index))
+                         (raft-log/index->term* (:log-file raft-state) prev-log-index))
         entries        (if (> next-index index)
                          []
                          (raft-log/read-entry-range (:log-file raft-state) next-index index))
@@ -129,7 +130,7 @@
     (cond
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state))
-      (become-follower raft-state term)
+      (become-follower raft-state term nil)
 
       done?
       (let [raft-state* (update-in raft-state [:servers server]
@@ -189,7 +190,7 @@
       (cond
         ;; response has a newer term, go to follower status and reset election timeout
         (> term (:term raft-state))
-        (become-follower raft-state term)
+        (become-follower raft-state term nil)
 
         ;; update successful
         (true? success)
@@ -260,7 +261,7 @@
     (cond
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state*))
-      (become-follower raft-state* term)
+      (become-follower raft-state* term nil)
 
       (and majority? (not (is-leader? raft-state*)))
       (become-leader raft-state*)
@@ -285,7 +286,7 @@
                           ;; register vote for self
                           (assoc-in [:servers this-server :vote] [proposed-term true]))
         {:keys [index term]} raft-state*
-        last-log-term (raft-log/term-of-index (:log-file raft-state) index)
+        last-log-term (raft-log/index->term* (:log-file raft-state) index)
         request       {:term           term
                        :candidate-id   this-server
                        :last-log-index index
