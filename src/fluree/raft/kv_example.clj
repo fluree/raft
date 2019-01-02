@@ -123,27 +123,27 @@
   "Sends rpc call to specified server.
   Includes a resp-chan that will eventually contain a response."
   [raft server operation data callback]
-  (let [server-config (get system server)
-        server-chan   (:rpc-chan server-config)
-        resp-chan     (async/promise-chan)
-        this-server   (:this-server raft)
-        msg-id        (str (UUID/randomUUID))
-        header        {:op        operation
+  ;; if system was shut down, there will not be a server-chan... no-op on send-rpc call
+  (when-let [server-chan (get-in system [server :rpc-chan])]
+    (let [resp-chan   (async/promise-chan)
+          this-server (:this-server raft)
+          msg-id      (str (UUID/randomUUID))
+          header      {:op        operation
                        :from      this-server
                        :to        server
                        :msg-id    msg-id
                        :resp-chan resp-chan}]
-    (async/put! server-chan [header data])
-    ;; wait for response and call back
-    ;; for now a single response channel is created for each request, so we need to match up requests/responses
-    (async/go (let [response (async/<! resp-chan)
-                    [header data] response]
-                (log/trace (str this-server " - send rpc resp: "
-                                {:header   (select-keys header [:op :from :to])
-                                 :data     data
-                                 :response response}))
-                (callback data)))
-    resp-chan))
+      (async/put! server-chan [header data])
+      ;; wait for response and call back
+      ;; for now a single response channel is created for each request, so we need to match up requests/responses
+      (async/go (let [response (async/<! resp-chan)
+                      [header data] response]
+                  (log/trace (str this-server " - send rpc resp: "
+                                  {:header   (select-keys header [:op :from :to])
+                                   :data     data
+                                   :response response}))
+                  (callback data)))
+      resp-chan)))
 
 
 (defn monitor-incoming-rcp
@@ -172,7 +172,8 @@
   [rpc-chan this-server]
   (fn []
     (async/close! rpc-chan)
-    (alter-var-root system (fn [sys] (dissoc sys this-server)))))
+    (alter-var-root #'system (fn [sys] (dissoc sys this-server)))
+    ::closed))
 
 
 (defn start-instance
@@ -181,6 +182,9 @@
         state-machine-atom (atom {})
         persist-dir        (str "log/" (name server-id) "/")
         raft               (raft/start {:this-server      server-id
+                                        :leader-change-fn (fn [x] (log/info
+                                                                    (str server-id " reports leader change to: "
+                                                                         (:leader x) " term: " (:term x))))
                                         :servers          servers
                                         :election-timeout 500
                                         :broadcast-time   100
@@ -283,6 +287,15 @@
    (rpc-sync server [:delete k])))
 
 
+(defn close
+  "Closes specified server."
+  [system server]
+  (let [server (if (keyword? server) server (keyword (str server)))
+        raft   (get-in system [server :raft])]
+    (raft/close raft)
+    :closed))
+
+
 
 (comment
 
@@ -319,5 +332,8 @@
 
   ;; delete a key (sends to leader)
   (delete "testkey")
+
+  ;; shut down a server
+  (close system 3)
 
   )

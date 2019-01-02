@@ -41,8 +41,9 @@
   [raft]
   (let [close-fn (get-in raft [:config :close-fn])]
     (async/close! (event-chan raft))
-    (when (fn? close-fn)
-      (close-fn))))
+    (if (fn? close-fn)
+      (close-fn)
+      :closed)))
 
 
 (defn request-vote-event
@@ -76,7 +77,9 @@
                              (raft-log/write-voted-for (:log-file raft-state) proposed-term candidate-id)
                              (assoc raft-state :term proposed-term
                                                :voted-for candidate-id
-                                               :status :follower)))]
+                                               :status :follower
+                                               ;; reset timeout if we voted so as to not possibly immediately start a new election
+                                               :timeout (async/timeout (leader/generate-election-timeout raft-state)))))]
     (callback response)
     raft-state*))
 
@@ -121,79 +124,77 @@
 
 (defn append-entries-event
   [raft-state args callback]
-  (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
-        proposed-term          (:term args)
-        {:keys [term index snapshot-index]} raft-state
-        term-at-prev-log-index (cond
-                                 (= 0 prev-log-index) 0
+  (if (< (:term args) (:term raft-state))
+    ;; old term!
+    (do
+      (callback {:term (:term raft-state) :success false})
+      raft-state)
+    ;; current or newer term
+    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
+          proposed-term          (:term args)
+          {:keys [term index snapshot-index leader]} raft-state
+          term-at-prev-log-index (cond
+                                   (= 0 prev-log-index) 0
 
-                                 (= prev-log-index snapshot-index)
-                                 (:snapshot-term raft-state)
+                                   (= prev-log-index snapshot-index)
+                                   (:snapshot-term raft-state)
 
-                                 (<= prev-log-index index)
-                                 (raft-log/index->term (:log-file raft-state) prev-log-index)
+                                   (<= prev-log-index index)
+                                   (raft-log/index->term (:log-file raft-state) prev-log-index)
 
-                                 :else nil)
-        old-term?              (< proposed-term term)
-        new-leader?            (> proposed-term term)
-        logs-match?            (= prev-log-term term-at-prev-log-index)
-        raft-state*            (cond-> (assoc raft-state :timeout (async/timeout (leader/generate-election-timeout raft-state))
-                                                         :leader leader-id)
+                                   :else nil)
+          new-leader?            (or (> proposed-term term) (not= leader-id leader))
+          logs-match?            (= prev-log-term term-at-prev-log-index)
+          new-timeout            (async/timeout (leader/generate-election-timeout raft-state))
+          raft-state*            (cond-> (assoc raft-state :timeout new-timeout)
 
-                                       ;; leader's term is newer, update leader info
-                                       new-leader?
-                                       (#(do
-                                           (when (> index prev-log-index)
-                                             ;; it is possible we have log entries after the leader's latest, remove them
-                                             (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
-                                           (leader/become-follower % proposed-term leader-id)))
+                                         ;; leader's term is newer, update leader info
+                                         new-leader?
+                                         (#(do
+                                             (when (> index prev-log-index)
+                                               ;; it is possible we have log entries after the leader's latest, remove them
+                                               (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
+                                             (leader/become-follower % proposed-term leader-id)))
 
-                                       ;; we have a log match at prev-log-index
-                                       (and logs-match? (not-empty entries))
-                                       (#(let [new-index (+ prev-log-index (count entries))]
-                                           (if (or (= index prev-log-index) new-leader?)
+                                         ;; we have a log match at prev-log-index
+                                         (and logs-match? (not-empty entries))
+                                         (#(let [new-index (+ prev-log-index (count entries))]
+                                             (if (or (= index prev-log-index) new-leader?)
 
-                                             ;; new entries, so add. If new leader, possibly over-write existing entries
-                                             (raft-log/append (:log-file %) entries prev-log-index index)
+                                               ;; new entries, so add. If new leader, possibly over-write existing entries
+                                               (raft-log/append (:log-file %) entries prev-log-index index)
 
-                                             ;; Possibly new entries and no leader change.
-                                             ;; At least some of these entries duplicate ones already received.
-                                             ;; Happens when round-trip response doesn't complete prior to new updates being sent
-                                             (let [new-entries-n (- new-index index)
-                                                   new-entries   (take-last new-entries-n entries)]
-                                               (when new-entries
-                                                 (raft-log/append (:log-file %) new-entries index index))))
+                                               ;; Possibly new entries and no leader change.
+                                               ;; At least some of these entries duplicate ones already received.
+                                               ;; Happens when round-trip response doesn't complete prior to new updates being sent
+                                               (let [new-entries-n (- new-index index)
+                                                     new-entries   (take-last new-entries-n entries)]
+                                                 (when new-entries
+                                                   (raft-log/append (:log-file %) new-entries index index))))
 
-                                           ;; as an optimization, we will cache last entry as it will likely be requested next
-                                           (raft-log/assoc-index->term-cache new-index (:term (last entries)))
+                                             ;; as an optimization, we will cache last entry as it will likely be requested next
+                                             (raft-log/assoc-index->term-cache new-index (:term (last entries)))
 
-                                           (assoc % :index new-index)))
+                                             (assoc % :index new-index)))
 
 
-                                       ;; entry at prev-log-index doesn't match local log term, remove offending entries
-                                       (not logs-match?)
-                                       (#(do
-                                           (raft-log/remove-entries (:log-file %) prev-log-index)
-                                           (assoc % :index (dec prev-log-index))))
+                                         ;; entry at prev-log-index doesn't match local log term, remove offending entries
+                                         (not logs-match?)
+                                         (#(do
+                                             (raft-log/remove-entries (:log-file %) prev-log-index)
+                                             (assoc % :index (dec prev-log-index))))
 
-                                       ;; Check if commit is newer and process into state machine if needed
-                                       logs-match?
-                                       (update-commits leader-commit))
-        response               (cond
-                                 ;; older term, outright reject, send our current term back
-                                 old-term?
-                                 {:term term :success true}
+                                         ;; Check if commit is newer and process into state machine if needed
+                                         logs-match?
+                                         (update-commits leader-commit))
+          response               (cond
+                                   logs-match?
+                                   {:term proposed-term :success true}
 
-                                 logs-match?
-                                 {:term proposed-term :success true}
+                                   :else
+                                   {:term proposed-term :success false})]
 
-                                 :else
-                                 {:term proposed-term :success false})]
-
-    (callback response)
-
-    (if old-term?
-      raft-state
+      (callback response)
       raft-state*)))
 
 
@@ -484,6 +485,7 @@
                 retain-logs snapshot-threshold persist-dir state-machine
                 snapshot-write snapshot-xfer snapshot-install snapshot-reify
                 send-rpc-fn default-command-timeout close-fn
+                leader-change-fn                            ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
                 event-chan command-chan]
          :or   {election-timeout        500                 ;; election-timeout, good range is 10ms->500ms
                 broadcast-time          100                 ;; heartbeat broadcast-time
@@ -514,6 +516,7 @@
                                   :event-chan event-chan
                                   :command-chan command-chan
                                   :close close-fn
+                                  :leader-change leader-change-fn
                                   :default-command-timeout default-command-timeout)
 
         raft-state  {:config           config*

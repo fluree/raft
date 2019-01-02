@@ -1,6 +1,7 @@
 (ns fluree.raft.leader
   (:require [clojure.core.async :as async]
-            [fluree.raft.log :as raft-log]))
+            [fluree.raft.log :as raft-log]
+            [clojure.tools.logging :as log]))
 
 
 (defn is-leader?
@@ -43,15 +44,27 @@
        (minimum-majority)))
 
 
+(defn call-leader-change-fn
+  "If exists, calls leader change function."
+  [raft-state]
+  (when-let [leader-change (get-in raft-state [:config :leader-change])]
+    (when (fn? leader-change)
+      (try (leader-change raft-state)
+           (catch Exception e (log/error e "Exception calling leader-change function."))))))
+
+
 (defn become-follower
   "Transition from a leader to a follower"
   [raft-state new-term new-leader-id]
-  (raft-log/write-current-term (:log-file raft-state) new-term)
-  (assoc raft-state :term new-term
-                    :status :follower
-                    :leader new-leader-id
-                    :voted-for nil
-                    :timeout (async/timeout (generate-election-timeout raft-state))))
+  (when (not= new-term (:term raft-state))
+    (raft-log/write-current-term (:log-file raft-state) new-term))
+  (let [raft-state* (assoc raft-state :term new-term
+                                      :status :follower
+                                      :leader new-leader-id
+                                      :voted-for nil
+                                      :timeout (async/timeout (generate-election-timeout raft-state)))]
+    (call-leader-change-fn raft-state*)
+    raft-state*))
 
 
 (defn- send-append-entry*
@@ -234,6 +247,7 @@
                                          :leader this-server
                                          :servers servers*
                                          :timeout (async/timeout broadcast-time))]
+    (call-leader-change-fn raft-state*)
     ;; send an initial append-entries to make sure everyone knows we are the leader
     (send-append-entries raft-state*)))
 
@@ -290,6 +304,8 @@
                        :candidate-id   this-server
                        :last-log-index index
                        :last-log-term  (or last-log-term 0)}]
+    (when (not= (:leader raft-state*) (:leader raft-state))
+      (call-leader-change-fn raft-state*))
     (doseq [server (remote-servers raft-state*)]
       (let [callback (fn [response]
                        (async/put! event-chan
