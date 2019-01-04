@@ -180,23 +180,23 @@
   [servers server-id]
   (let [rpc-chan           (async/chan)
         state-machine-atom (atom {})
-        persist-dir        (str "log/" (name server-id) "/")
+        log-directory      (str "log/" (name server-id) "/")
         raft               (raft/start {:this-server      server-id
                                         :leader-change-fn (fn [x] (log/info
                                                                     (str server-id " reports leader change to: "
                                                                          (:leader x) " term: " (:term x))))
                                         :servers          servers
-                                        :election-timeout 500
-                                        :broadcast-time   100
+                                        :timeout-ms       500
+                                        :heartbeat-ms     100
                                         :send-rpc-fn      send-rpc
-                                        :persist-dir      persist-dir
+                                        :log-directory    log-directory
+                                        :log-history      3
                                         :close-fn         (close-fn rpc-chan server-id)
-                                        :retain-logs      3
                                         :state-machine    (state-machine state-machine-atom)
-                                        :snapshot-write   (snapshot-writer (str persist-dir "snapshots/") state-machine-atom)
-                                        :snapshot-reify   (snapshot-reify (str persist-dir "snapshots/") state-machine-atom)
-                                        :snapshot-xfer    (snapshot-xfer (str persist-dir "snapshots/"))
-                                        :snapshot-install (snapshot-installer (str persist-dir "snapshots/"))})]
+                                        :snapshot-write   (snapshot-writer (str log-directory "snapshots/") state-machine-atom)
+                                        :snapshot-reify   (snapshot-reify (str log-directory "snapshots/") state-machine-atom)
+                                        :snapshot-xfer    (snapshot-xfer (str log-directory "snapshots/"))
+                                        :snapshot-install (snapshot-installer (str log-directory "snapshots/"))})]
     (monitor-incoming-rcp (raft/event-chan raft) rpc-chan server-id)
     {:raft       raft
      :state-atom state-machine-atom
@@ -334,6 +334,6 @@
   (delete "testkey")
 
   ;; shut down a server
-  (close system 3)
+  (close system 4)
 
   )

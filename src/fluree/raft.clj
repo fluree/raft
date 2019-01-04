@@ -79,7 +79,7 @@
                                                :voted-for candidate-id
                                                :status :follower
                                                ;; reset timeout if we voted so as to not possibly immediately start a new election
-                                               :timeout (async/timeout (leader/generate-election-timeout raft-state)))))]
+                                               :timeout (async/timeout (leader/new-election-timeout raft-state)))))]
     (callback response)
     raft-state*))
 
@@ -145,7 +145,7 @@
                                    :else nil)
           new-leader?            (or (> proposed-term term) (not= leader-id leader))
           logs-match?            (= prev-log-term term-at-prev-log-index)
-          new-timeout            (async/timeout (leader/generate-election-timeout raft-state))
+          new-timeout            (async/timeout (leader/new-election-timeout raft-state))
           raft-state*            (cond-> (assoc raft-state :timeout new-timeout)
 
                                          ;; leader's term is newer, update leader info
@@ -291,7 +291,7 @@
 
   This means all state changes are single-threaded.
 
-  Maintains appropriate timeouts (hearbeat if leader, or election-timeout if not leader)
+  Maintains appropriate timeouts (hearbeat if leader, or election timeout if not leader)
   to trigger appropriate actions when no activity happens between timeouts.
 
 
@@ -311,7 +311,7 @@
         this-server     (:this-server raft-state)]
     (async/go-loop [raft-state (assoc raft-state
                                  :timeout (async/timeout
-                                            (leader/generate-election-timeout raft-state)))]
+                                            (leader/new-election-timeout raft-state)))]
       (let [timeout-chan (:timeout raft-state)
             [event c] (async/alts! [event-channel command-channel timeout-chan] :priority true)
             [op data callback] event
@@ -441,9 +441,9 @@
 
 (defn initialize-raft-state
   [raft-state]
-  (let [{:keys [persist-dir snapshot-reify]} (:config raft-state)
-        latest-log      (raft-log/latest-log-index persist-dir)
-        latest-log-file (io/file persist-dir (str latest-log ".raft"))
+  (let [{:keys [log-directory snapshot-reify]} (:config raft-state)
+        latest-log      (raft-log/latest-log-index log-directory)
+        latest-log-file (io/file log-directory (str latest-log ".raft"))
         log-entries     (try (raft-log/read-log-file latest-log-file)
                              (catch java.io.FileNotFoundException _ nil))
         raft-state*     (reduce
@@ -481,18 +481,18 @@
 
 (defn start
   [config]
-  (let [{:keys [this-server servers election-timeout broadcast-time
-                retain-logs snapshot-threshold persist-dir state-machine
+  (let [{:keys [this-server servers timeout-ms heartbeat-ms
+                log-history snapshot-threshold log-directory state-machine
                 snapshot-write snapshot-xfer snapshot-install snapshot-reify
                 send-rpc-fn default-command-timeout close-fn
                 leader-change-fn                            ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
                 event-chan command-chan]
-         :or   {election-timeout        500                 ;; election-timeout, good range is 10ms->500ms
-                broadcast-time          100                 ;; heartbeat broadcast-time
-                retain-logs             10                  ;; number of historical log files to retain
+         :or   {timeout-ms              500                 ;; election timeout, good range is 10ms->500ms
+                heartbeat-ms            100                 ;; heartbeat time in milliseconds
+                log-history             10                  ;; number of historical log files to retain
                 snapshot-threshold      10                  ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 default-command-timeout 4000
-                persist-dir             "raftlog/"
+                log-directory           "raftlog/"
                 event-chan              (async/chan)
                 command-chan            (async/chan)
                 }} config
@@ -502,11 +502,11 @@
         _           (assert (fn? snapshot-install))
         _           (assert (fn? snapshot-xfer))
 
-        config*     (assoc config :election-timeout election-timeout
-                                  :broadcast-time broadcast-time
-                                  :persist-dir persist-dir
+        config*     (assoc config :timeout-ms timeout-ms
+                                  :heartbeat-ms heartbeat-ms
+                                  :log-directory log-directory
                                   :send-rpc-fn send-rpc-fn
-                                  :retain-logs retain-logs
+                                  :log-history log-history
                                   :snapshot-threshold snapshot-threshold
                                   :state-machine state-machine
                                   :snapshot-write snapshot-write
@@ -523,7 +523,7 @@
                      :this-server      this-server
                      :status           nil                  ;; candidate, leader, follower
                      :leader           nil                  ;; current known leader
-                     :log-file         (io/file persist-dir "0.raft")
+                     :log-file         (io/file log-directory "0.raft")
                      :term             0                    ;; latest term
                      :index            0                    ;; latest index
                      :snapshot-index   0                    ;; index point of last snapshot

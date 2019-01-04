@@ -17,10 +17,10 @@
         (dissoc this-server)
         keys)))
 
-(defn generate-election-timeout
+(defn new-election-timeout
   "Generates a new election timeout in milliseconds."
   [raft]
-  (let [election-timeout (get-in raft [:config :election-timeout])]
+  (let [election-timeout (get-in raft [:config :timeout-ms])]
     (+ election-timeout (rand-int election-timeout))))
 
 
@@ -62,7 +62,7 @@
                                       :status :follower
                                       :leader new-leader-id
                                       :voted-for nil
-                                      :timeout (async/timeout (generate-election-timeout raft-state)))]
+                                      :timeout (async/timeout (new-election-timeout raft-state)))]
     (call-leader-change-fn raft-state*)
     raft-state*))
 
@@ -222,7 +222,7 @@
 (defn send-append-entries
   "Sends append entries requests to all servers."
   [raft-state]
-  (let [heartbeat-timeout (get-in raft-state [:config :broadcast-time])]
+  (let [heartbeat-timeout (get-in raft-state [:config :heartbeat-ms])]
     (doseq [server-id (remote-servers raft-state)]
       (send-append-entry raft-state server-id))
     ;; reset timeout
@@ -233,7 +233,7 @@
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
   [raft-state]
   (let [{:keys [this-server index servers]} raft-state
-        broadcast-time (get-in raft-state [:config :broadcast-time])
+        heartbeat-time (get-in raft-state [:config :heartbeat-ms])
         next-index     (inc index)
         server-ids     (keys servers)
         servers*       (reduce (fn [servers server-id]
@@ -246,7 +246,7 @@
         raft-state*    (assoc raft-state :status :leader
                                          :leader this-server
                                          :servers servers*
-                                         :timeout (async/timeout broadcast-time))]
+                                         :timeout (async/timeout heartbeat-time))]
     (call-leader-change-fn raft-state*)
     ;; send an initial append-entries to make sure everyone knows we are the leader
     (send-append-entries raft-state*)))
@@ -312,4 +312,4 @@
                                    [:request-vote-response
                                     {:server server :request request :response response}]))]
         (send-rpc-fn raft-state* server :request-vote request callback)))
-    (assoc raft-state* :timeout (async/timeout (generate-election-timeout raft-state)))))
+    (assoc raft-state* :timeout (async/timeout (new-election-timeout raft-state)))))

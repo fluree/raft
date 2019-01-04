@@ -274,16 +274,16 @@
   "Rotates current log"
   [raft-state]
   (let [{:keys [config snapshot-index snapshot-term voted-for term index log-file]} raft-state
-        {:keys [persist-dir retain-logs]} config
+        {:keys [log-directory log-history]} config
         entries-post-snapshot (read-entry-range log-file (inc snapshot-index))
-        all-logs              (all-log-indexes persist-dir)
+        all-logs              (all-log-indexes log-directory)
         max-log-n             (when (not-empty all-logs) (apply max all-logs))
         next-log-n            (if max-log-n
                                 (max snapshot-index (inc max-log-n))
                                 snapshot-index)
-        new-log               (io/file persist-dir (str next-log-n ".raft"))
-        purge-logs            (when (pos-int? retain-logs)
-                                (drop retain-logs (sort > all-logs)))]
+        new-log               (io/file log-directory (str next-log-n ".raft"))
+        purge-logs            (when (pos-int? log-history)
+                                (drop log-history (sort > all-logs)))]
     ;; initialize base entries in log
     (write-snapshot new-log snapshot-index snapshot-term)
     (write-current-term new-log term)
@@ -299,7 +299,7 @@
 
     ;; purge/remove old log files, if exist
     (doseq [old-log purge-logs]
-      (let [file (io/file persist-dir (str old-log ".raft"))]
+      (let [file (io/file log-directory (str old-log ".raft"))]
         (io/delete-file file true)))
 
     (assoc raft-state :log-file new-log)))
