@@ -70,9 +70,20 @@
               ba         (byte-array next-bytes)
               index      (.readLong raf)
               term       (.readLong raf)
-              entry-type (if (pos? index) :append-entry (get entry-types' index))]
-          (.read raf ba)
-          (recur (conj log [index term entry-type (nippy/thaw ba)])))))))
+              _          (.read raf ba)                     ;; read entry into byte-array
+              entry-type (if (pos? index) :append-entry (get entry-types' index))
+              entry-data (try (nippy/thaw ba)
+                              (catch Exception e (throw (ex-info
+                                                          "Raft log file appears to be corrupt. Delete raft logs for this server and re-start, assuming you have an existing raft quorum. It will re-sync from other servers."
+                                                          {:file            (.getPath file)
+                                                           :entry-number    (inc (count log))
+                                                           :entry-type-code index
+                                                           :entry-type      entry-type
+                                                           :entry-term      term
+                                                           :entry-bytes     next-bytes
+                                                           :bytes           (vec ba)
+                                                           :error           (.getMessage e)}))))]
+          (recur (conj log [index term entry-type entry-data])))))))
 
 
 (defn- read-entry
