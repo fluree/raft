@@ -6,6 +6,7 @@
             [fluree.raft.leader :as leader])
   (:import (java.util UUID)))
 
+(defrecord RaftCommand [entry id timeout callback])
 
 (defn event-chan
   "Returns event channel for the raft instance."
@@ -208,25 +209,6 @@
            nil))))
 
 
-(defn command-response
-  "Generates a new command response, uses timeout for default response."
-  [raft-state id resp-chan timeout-ms callback]
-  (async/go
-    (try
-      (let [timeout-chan (async/timeout timeout-ms)
-            [resp c] (async/alts! [resp-chan timeout-chan])
-            timeout?     (= timeout-chan c)]
-        ;; if timeout, clear callback from raft-state
-        (when timeout?
-          (async/put! (event-chan raft-state) [:new-command-timeout id]))
-        (if timeout?
-          (safe-callback callback (ex-info "Command timed out." {:operation :new-command
-                                                                 :error     :raft/command-timeout
-                                                                 :id        id}))
-          (safe-callback callback resp)))
-      (catch Exception e (log/error e) (throw e)))))
-
-
 (defn into-chan
   "Conjoins all available entries in channel to supplied collection."
   [coll c]
@@ -286,6 +268,54 @@
       raft-state*)))
 
 
+(defn- register-callback-event
+  "Registers a single-arg callback to be executed once a command with specified id is committed to state
+  machine with the result the state machine replies."
+  [raft-state command-id timeout-ms callback]
+  (let [resp-chan (async/promise-chan)
+        timeout   (or timeout-ms 5000)]
+    ;; launch a go channel with timeout to ensure callback is always called and cleared from state
+    (async/go
+      (try
+        (let [timeout-chan (async/timeout timeout)
+              [resp c] (async/alts! [resp-chan timeout-chan])
+              timeout?     (= timeout-chan c)]
+          (if timeout?
+            (do
+              (async/put! (event-chan raft-state) [:new-command-timeout command-id]) ;; clears callback from raft-state
+              (safe-callback callback (ex-info "Command timed out." {:operation :new-command
+                                                                     :error     :raft/command-timeout
+                                                                     :id        command-id})))
+            (safe-callback callback resp)))
+        (catch Exception e (log/error e) (throw e))))
+    ;; register command id to raft-state for use when processing new commits to state machine
+    (assoc-in raft-state [:command-callbacks command-id] resp-chan)))
+
+
+(defn- new-command-event
+  "Processes new commands. Only happens if currently a raft leader."
+  [raft-state command-events]
+  (let [this-server (:this-server raft-state)]
+    (loop [[cmd-event & r] command-events
+           raft-state raft-state]
+      (let [[_ command persist-callback] cmd-event
+            {:keys [entry id timeout callback]} command
+            new-index    (inc (:index raft-state))
+            log-entry    {:term (:term raft-state) :entry entry :id id}
+            _            (raft-log/write-new-command (:log-file raft-state) new-index log-entry)
+            raft-state*  (-> raft-state
+                             (assoc :index new-index)
+                             ;; match-index majority used for updating leader-commit
+                             (assoc-in [:servers this-server :match-index] new-index))
+            raft-state** (if (fn? callback)
+                           (register-callback-event raft-state* id timeout callback)
+                           raft-state*)]
+        (safe-callback persist-callback true)
+        (if r
+          (recur r raft-state**)
+          raft-state**)))))
+
+
 (defn event-loop
   "Launches an event loop where all state changes to the raft state happen.
 
@@ -307,8 +337,7 @@
   - close                 - gracefully closes down raft"
   [raft-state]
   (let [event-channel   (event-chan raft-state)
-        command-channel (get-in raft-state [:config :command-chan])
-        this-server     (:this-server raft-state)]
+        command-channel (get-in raft-state [:config :command-chan])]
     (async/go-loop [raft-state (assoc raft-state
                                  :timeout (async/timeout
                                             (leader/new-election-timeout raft-state)))]
@@ -339,41 +368,30 @@
                     :request-vote
                     (request-vote-event raft-state data callback)
 
-                    ;; append a new log entry, an ultimately command into state machine - only done by leader
+                    ;; registers a callback for a pending command which will be called once committed to the state machine
+                    ;; this is used by followers to get a callback when a command they forward to a leader gets committed
+                    ;; to local state
+                    :register-callback
+                    (let [[command-id timeout] data]
+                      (register-callback-event raft-state command-id timeout callback))
+
+                    ;; append a new log entry to get committed to state machine - only done by leader
                     :new-command
-                    (if-not (leader/is-leader? raft-state)
+                    (if (leader/is-leader? raft-state)
+                      ;; leader. Drain all commands and process together.
+                      (let [all-commands (into-chan [event] command-channel)]
+                        (new-command-event raft-state all-commands))
                       ;; not leader
                       (do
-                        (safe-callback callback (ex-info "Server is not currently leader." {:operation :new-command
-                                                                                            :error     :raft/not-leader}))
-                        raft-state)
-
-                      ;; we are leader - drain all commands so can be sent in batch
-                      (let [commands    (into-chan [event] command-channel)
-                            raft-state* (loop [[command & r] commands
-                                               raft-state raft-state]
-                                          (if command
-                                            (let [[_ data callback] command
-                                                  id          (or (:id data) (str (UUID/randomUUID)))
-                                                  timeout     (or (:timeout data) (get-in raft-state [:config :default-command-timeout]))
-                                                  resp-chan   (async/promise-chan)
-                                                  new-index   (inc (:index raft-state))
-                                                  entry       {:term (:term raft-state) :entry data :id id}
-                                                  _           (raft-log/write-new-command (:log-file raft-state) new-index entry)
-                                                  raft-state* (-> raft-state
-                                                                  (assoc :index new-index)
-                                                                  (assoc-in [:servers this-server :match-index] new-index) ;; match-index majority used for updating leader-commit
-                                                                  (assoc-in [:command-callbacks id] resp-chan))]
-                                              ;; create a go-channel to monitor for response
-                                              (command-response raft-state* id resp-chan timeout callback)
-                                              ;; kick off an append-entries call
-                                              (recur r raft-state*))
-                                            raft-state))]
-                        (leader/send-append-entries raft-state*)))
+                        (safe-callback callback (ex-info "Server is not currently leader."
+                                                         {:operation :new-command
+                                                          :error     :raft/not-leader}))
+                        raft-state))
 
                     ;; a command timed out, remove from state
                     :new-command-timeout
                     (update raft-state :command-callbacks dissoc data)
+
 
                     ;; response to append entry requests to external servers
                     :append-entries-response
@@ -425,18 +443,42 @@
                                                                          :error     :raft/shutdown})))
                       (safe-callback callback :raft-closed)
                       raft-state))
-                  (catch Exception e (throw (ex-info (str "Raft error processing command: " op) {:data       data
-                                                                                                 :raft-state raft-state} e))))]
+                  (catch Exception e (throw (ex-info (str "Raft error processing command: " op)
+                                                     {:data       data
+                                                      :raft-state raft-state} e))))]
             (when (not= :close op)
               (recur raft-state*))))))))
 
 
+(defn register-callback
+  "Registers a callback for a command with specified id."
+  [raft command-id timeout-ms callback]
+  (let [event-chan (event-chan raft)]
+    (async/put! event-chan [:register-callback [command-id timeout-ms] callback])))
+
+
 (defn new-command
-  "Issues a new command to raft. Will return an error if we are not the current leader."
+  "Issues a new RaftCommand (leader only) to create a new log entry."
   ([raft command] (new-command raft command nil))
-  ([raft command callback]
+  ([raft command persist-callback]
+   (assert (instance? RaftCommand command))
    (let [command-chan (get-in raft [:config :command-chan])]
-     (async/put! command-chan [:new-command command callback]))))
+     (async/put! command-chan [:new-command command persist-callback]))))
+
+
+(defn new-entry
+  "Creates a new log entry (leader only). Generates a RaftCommand and submits it for processing."
+  ([raft entry callback]
+   (let [timeout (or (get-in raft [:config :default-command-timeout]) 5000)]
+     (new-entry raft entry callback timeout)))
+  ([raft entry callback timeout-ms]
+   (assert (pos-int? timeout-ms))
+   (let [id      (str (UUID/randomUUID))
+         command (map->RaftCommand {:entry    entry
+                                    :id       id
+                                    :timeout  timeout-ms
+                                    :callback callback})]
+     (new-command raft command nil))))
 
 
 (defn initialize-raft-state

@@ -240,13 +240,13 @@
 
 (defn rpc-sync
   "Performs a synchronous rpc call to specified server."
-  [server command]
+  [server entry]
   (let [raft         (get-in system [server :raft])
         promise-chan (async/promise-chan)
         callback     (fn [resp] (if (nil? resp)
                                   (async/close! promise-chan)
                                   (async/put! promise-chan resp)))]
-    (raft/new-command raft command callback)
+    (raft/new-entry raft entry callback)
     (async/<!! promise-chan)))
 
 
