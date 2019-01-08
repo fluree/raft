@@ -214,7 +214,7 @@
 
         ;; update failed - decrement next-index and re-send an update
         (false? success)
-        (let [raft-state* (update-in raft-state [:servers server :next-index] dec)]
+        (let [raft-state* (update-in raft-state [:servers server :next-index] (fn [i] (max (dec i) 1)))]
           (send-append-entry raft-state* server)
           raft-state*)))))
 
