@@ -360,18 +360,15 @@
 (defn send-queued-messages
   "Sends all queued messages if we aren't waiting for responses."
   [raft-state]
-  (let [{:keys [other-servers config]} raft-state
-        {:keys [send-rpc-fn]} config]
-    (reduce
-      (fn [raft-state* server-id]
-        (if-let [next-message (get-in raft-state* [:servers server-id :next-message])]
-          (do
-            (apply send-rpc-fn raft-state* server-id next-message)
-            (-> raft-state*
-                (assoc-in [:servers server-id :next-message] nil)
-                (update-in [:servers server-id :stats :sent] inc)))
-          raft-state*))
-      raft-state other-servers)))
+  (if-let [msg-queue (not-empty (:msg-queue raft-state))]
+    (let [send-rpc-fn (get-in raft-state [:config :send-rpc-fn])
+          raft-state* (dissoc raft-state :msg-queue)]
+      (reduce-kv
+        (fn [raft-state* server-id message]
+          (apply send-rpc-fn raft-state* server-id message)
+          (update-in raft-state* [:servers server-id :stats :sent] inc))
+        raft-state* msg-queue))
+    raft-state))
 
 
 (defn event-loop
@@ -677,6 +674,7 @@
 
                         ;; map of servers participating in consensus. server id is key, state of server is val
                         :servers          (reduce #(assoc %1 %2 leader/server-state-baseline) {} servers) ;; will be set up by leader/reset-server-state
+                        :msg-queue        nil               ;; holds outgoing messages
                         }
                        (initialize-raft-state))]
     (event-loop raft-state)

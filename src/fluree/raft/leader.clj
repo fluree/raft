@@ -72,7 +72,6 @@
 (def ^:const server-state-baseline {:vote           nil     ;; holds two-tuple of [term voted-for?]
                                     :next-index     0       ;; next index to send
                                     :match-index    0       ;; last known index persisted
-                                    :next-message   nil     ;; queue of next message waiting to send
                                     :snapshot-index nil     ;; when sending, current snapshot index currently being sent
                                     :stats          {:sent         0
                                                      :received     0
@@ -100,6 +99,7 @@
                                :status :follower
                                :leader new-leader-id
                                :voted-for nil
+                               :msg-queue nil
                                :timeout (async/timeout (new-election-timeout raft-state)))
                         (reset-server-state))]
     (call-leader-change-fn raft-state*)
@@ -110,7 +110,7 @@
   ([raft-state server] (let [{:keys [snapshot-index snapshot-term]} raft-state]
                          (queue-install-snapshot raft-state server snapshot-index snapshot-term 1)))
   ([raft-state server snapshot-index snapshot-term snapshot-part]
-   (let [{:keys [term servers this-server config]} raft-state
+   (let [{:keys [term this-server config]} raft-state
          {:keys [snapshot-xfer event-chan]} config
          snapshot-data (snapshot-xfer snapshot-index snapshot-part)
          data          {:leader-id      this-server
@@ -125,9 +125,10 @@
                                                   [:install-snapshot-response {:server   server
                                                                                :request  (dissoc data :snapshot-data)
                                                                                :response response}]))]
-     (update-in raft-state [:servers server]
-                #(assoc % :next-message [:install-snapshot data callback]
-                          :snapshot-index snapshot-index)))))
+     (-> raft-state
+         (assoc-in [:msg-queue server] [:install-snapshot data callback])
+         (update-in [:servers server]
+                    #(assoc % :snapshot-index snapshot-index))))))
 
 
 ;; TODO - rename :snapshot-index in server state to something like :sending-snapshot, so different name than what is in raft-state
@@ -176,7 +177,7 @@
                                                                                  :response response}]))
             message        [:append-entries data callback]]
         (-> raft-state
-            (assoc-in [:servers server :next-message] message)
+            (assoc-in [:msg-queue server] message)
             ;; update next-index, we will send out parallel updates as needed
             (assoc-in [:servers server :next-index] (inc end-index)))))))
 
@@ -358,7 +359,7 @@
                                                                    [:request-vote-response
                                                                     {:server server :request request :response response}]))
                                             message  [:request-vote request callback]]
-                                        (assoc-in state [:servers server :next-message] message)))
+                                        (assoc-in state [:msg-queue server] message)))
                                     % other-servers)))]
     ;; if we have current leader (not nil), we have a leader state change
     (when leader (call-leader-change-fn raft-state*))
