@@ -138,6 +138,8 @@
       ;; for now a single response channel is created for each request, so we need to match up requests/responses
       (async/go (let [response (async/<! resp-chan)
                       [header data] response]
+                  ;; tiny delay receiving message
+                  (async/<! (async/timeout 5))
                   (log/trace (str this-server " - send rpc resp: "
                                   {:header   (select-keys header [:op :from :to])
                                    :data     data
@@ -152,6 +154,8 @@
   [event-chan rpc-chan this-server]
   (async/go-loop []
     (let [rpc (async/<! rpc-chan)]
+      ;; tiny delay receiving message
+      (async/<! (async/timeout 5))
       (if (nil? rpc)
         (log/warn "RPC channel closed for server:" this-server)
         (let [[header data] rpc
@@ -180,14 +184,14 @@
   [servers server-id]
   (let [rpc-chan           (async/chan)
         state-machine-atom (atom {})
-        log-directory      (str "log/" (name server-id) "/")
+        log-directory      (str "raftlog/" (name server-id) "/")
         raft               (raft/start {:this-server      server-id
                                         :leader-change-fn (fn [x] (log/info
                                                                     (str server-id " reports leader change to: "
                                                                          (:leader x) " term: " (:term x))))
                                         :servers          servers
-                                        :timeout-ms       500
-                                        :heartbeat-ms     100
+                                        :timeout-ms       1500
+                                        :heartbeat-ms     500
                                         :send-rpc-fn      send-rpc
                                         :log-directory    log-directory
                                         :log-history      3
@@ -230,16 +234,17 @@
 
 
 (defn get-leader
-  "Picks a random raft, and queries for leader."
-  [server]
-  (let [promise-chan (async/promise-chan)
-        callback     (fn [resp] (async/put! promise-chan (:leader resp)))]
-    (view-raft-state server callback)
-    (async/<!! promise-chan)))
+  "Returns leader according to specified server."
+  ([] (get-leader (random-server system)))
+  ([server]
+   (let [promise-chan (async/promise-chan)
+         callback     (fn [resp] (async/put! promise-chan (:leader resp)))]
+     (view-raft-state server callback)
+     (async/<!! promise-chan))))
 
 
-(defn rpc-sync
-  "Performs a synchronous rpc call to specified server."
+(defn rpc-async
+  "Performs  rpc call to specified server, returns core async channel."
   [server entry]
   (let [raft         (get-in system [server :raft])
         promise-chan (async/promise-chan)
@@ -247,7 +252,13 @@
                                   (async/close! promise-chan)
                                   (async/put! promise-chan resp)))]
     (raft/new-entry raft entry callback)
-    (async/<!! promise-chan)))
+    promise-chan))
+
+
+(defn rpc-sync
+  "Performs a synchronous rpc call to specified server."
+  [server entry]
+  (async/<!! (rpc-async server entry)))
 
 
 (defn write
@@ -257,6 +268,13 @@
    (rpc-sync server [:write k v])))
 
 
+(defn write-async
+  "Writes value to specified key, returns core async chan with eventual response."
+  ([k v] (write (get-leader (random-server system)) k v))
+  ([server k v]
+   (rpc-async server [:write k v])))
+
+
 (defn read
   "Reads from leader after all pending commands are committed."
   ([k] (read (get-leader (random-server system)) k))
@@ -264,13 +282,19 @@
    (rpc-sync server [:read k])))
 
 
+(defn dump-state
+  "Dumps our full state machine state for given server"
+  [server]
+  (let [server     (if (keyword? server) server (keyword (str server)))
+        state-atom (get-in system [server :state-atom])]
+    @state-atom))
+
+
 (defn read-local
   "Reads key from local state, doesn't sync across raft"
   ([k] (read-local (rand-nth (keys system)) k))
   ([server k]
-   (let [server     (if (keyword? server) server (keyword (str server)))
-         state-atom (get-in system [server :state-atom])]
-     (get @state-atom k))))
+   (get (dump-state server) k)))
 
 
 (defn cas
@@ -296,7 +320,6 @@
     :closed))
 
 
-
 (comment
 
   ;; specify number of raft servers to launch
@@ -307,6 +330,7 @@
 
   ;; get the current leader as per specified server
   (get-leader 1)
+
   ;; same as above, but picks random server to inquire
   (let [server (random-server system)]
     (println "Using server:" server)
@@ -315,12 +339,21 @@
   ;; assoc a key (sends to leader)
   (write "testkey" "testval")
 
+  ;; write a bunch of commands (must use async to get them to process simultaneously)
+  (let [leader (get-leader)]
+    (dotimes [i 100]
+      (write-async leader (str "key-" i) (str "val-" i))))
+
+
   ;; read a key, synchronized across servers (sends to leader)
   ;; will only read after all pending commands are processed
   (read "testkey")
 
   ;; read from local state immediately - specify any server (or omit for random server)
   (read-local 1 "testkey")
+
+  ;; dump out entire state machine current state (local)
+  (dump-state 1)
 
   ;; same command, but random server
   (let [server (random-server system)]

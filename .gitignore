@@ -15,4 +15,4 @@ pom.xml.asc
 .hg/
 *.iml
 .DS_Store
-/log
+/raftlog
