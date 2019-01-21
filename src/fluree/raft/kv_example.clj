@@ -96,7 +96,7 @@
               swap val to cas-v. Returns true on success and false on failure.
               i.e. [:cas 'mykey' 100 42] - swaps 'mykey' to 42 if current val is 100."
   [state-atom]
-  (fn [[op k v cas-v]]
+  (fn [[op k v cas-v] raft-state]
     (case op
       :write (do (swap! state-atom assoc k v)
                  true)

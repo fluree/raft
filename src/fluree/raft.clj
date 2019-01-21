@@ -133,7 +133,7 @@
                         :snapshot-pending snapshot-pending
                         :command-callbacks (reduce
                                              (fn [callbacks entry-map]
-                                               (let [resp (state-machine (:entry entry-map))]
+                                               (let [resp (state-machine (:entry entry-map) raft-state)]
                                                  (if-let [callback-chan (get callbacks (:id entry-map))]
                                                    (do
                                                      (if (nil? resp)
@@ -625,7 +625,7 @@
          :or   {timeout-ms              500                 ;; election timeout, good range is 10ms->500ms
                 heartbeat-ms            100                 ;; heartbeat time in milliseconds
                 log-history             10                  ;; number of historical log files to retain
-                snapshot-threshold      10                  ;; number of log entries since last snapshot (minimum) to generate new snapshot
+                snapshot-threshold      100                 ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 default-command-timeout 4000
                 log-directory           "raftlog/"
                 event-chan              (async/chan)
