@@ -238,7 +238,9 @@
   ([] (get-leader (random-server system)))
   ([server]
    (let [promise-chan (async/promise-chan)
-         callback     (fn [resp] (async/put! promise-chan (:leader resp)))]
+         callback     (fn [resp] (if-let [leader (:leader resp)]
+                                   (async/put! promise-chan leader)
+                                   (async/close! promise-chan)))]
      (view-raft-state server callback)
      (async/<!! promise-chan))))
 

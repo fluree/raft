@@ -1,6 +1,7 @@
 (ns fluree.raft.leader
   (:require [clojure.core.async :as async]
             [fluree.raft.log :as raft-log]
+            [fluree.raft.events :as events]
             [clojure.tools.logging :as log]))
 
 
@@ -23,13 +24,6 @@
 (defn is-leader?
   [raft-state]
   (= :leader (:status raft-state)))
-
-
-(defn new-election-timeout
-  "Generates a new election timeout in milliseconds."
-  [raft]
-  (let [election-timeout (get-in raft [:config :timeout-ms])]
-    (+ election-timeout (rand-int election-timeout))))
 
 
 (defn- minimum-majority
@@ -58,52 +52,6 @@
                                  vals
                                  (map :match-index)
                                  (minimum-majority))))
-
-
-(defn call-leader-change-fn
-  "If exists, calls leader change function."
-  [raft-state]
-  (when-let [leader-change (get-in raft-state [:config :leader-change])]
-    (when (fn? leader-change)
-      (try (leader-change raft-state)
-           (catch Exception e (log/error e "Exception calling leader-change function."))))))
-
-
-(def ^:const server-state-baseline {:vote           nil     ;; holds two-tuple of [term voted-for?]
-                                    :next-index     0       ;; next index to send
-                                    :match-index    0       ;; last known index persisted
-                                    :snapshot-index nil     ;; when sending, current snapshot index currently being sent
-                                    :stats          {:sent         0
-                                                     :received     0
-                                                     :avg-response 0}})
-
-
-(defn reset-server-state
-  "Called when we become a follower to clear out any pending outgoing messages."
-  [raft-state]
-  (let [servers (get-in raft-state [:config :servers])]
-    (reduce
-      (fn [raft-state* server-id]
-        (update-in raft-state* [:servers server-id]
-                   #(assoc server-state-baseline :stats (:stats %))))
-      raft-state servers)))
-
-
-(defn become-follower
-  "Transition from a leader to a follower"
-  [raft-state new-term new-leader-id]
-  (when (not= new-term (:term raft-state))
-    (raft-log/write-current-term (:log-file raft-state) new-term))
-  (let [raft-state* (-> raft-state
-                        (assoc :term new-term
-                               :status :follower
-                               :leader new-leader-id
-                               :voted-for nil
-                               :msg-queue nil
-                               :timeout (async/timeout (new-election-timeout raft-state)))
-                        (reset-server-state))]
-    (call-leader-change-fn raft-state*)
-    raft-state*))
 
 
 (defn- queue-install-snapshot
@@ -199,7 +147,7 @@
 
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state*))
-      (become-follower raft-state* term nil)
+      (events/become-follower raft-state* term nil)
 
       done?
       (-> raft-state*
@@ -249,7 +197,7 @@
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state*))
       (-> raft-state*
-          (become-follower term nil))
+          (events/become-follower term nil))
 
       ;; update successful
       (true? success)
@@ -289,7 +237,7 @@
                                          :leader this-server
                                          :servers servers*
                                          :timeout (async/timeout heartbeat-time))]
-    (call-leader-change-fn raft-state*)
+    (events/call-leader-change-fn raft-state*)
     (queue-append-entries raft-state*)))
 
 
@@ -301,7 +249,7 @@
     (cond
       ;; remote server is newer term, become follower
       (> (:term response) term)
-      (become-follower raft-state* (:term response) nil)
+      (events/become-follower raft-state* (:term response) nil)
 
       ;; we are no longer a candidate since sending this event, ignore
       (not candidate?)
@@ -333,6 +281,7 @@
 (defn request-votes
   "Request votes for leadership from all followers."
   [raft-state]
+  (log/warn "Calling request-votes 2!")
   (let [{:keys [this-server other-servers index term config leader]} raft-state
         {:keys [event-chan]} config
         proposed-term (inc term)
@@ -349,7 +298,7 @@
                                  :status :candidate         ;; register as candidate in state
                                  :leader nil
                                  :voted-for this-server
-                                 :timeout (async/timeout (new-election-timeout raft-state)))
+                                 :timeout (async/timeout (events/new-election-timeout raft-state)))
                           ;; register vote for self
                           (assoc-in [:servers this-server :vote] [proposed-term true])
                           ;; queue outgoing messages
@@ -361,6 +310,37 @@
                                             message  [:request-vote request callback]]
                                         (assoc-in state [:msg-queue server] message)))
                                     % other-servers)))]
-    ;; if we have current leader (not nil), we have a leader state change
-    (when leader (call-leader-change-fn raft-state*))
-    raft-state*))
+    ;; if we have current leader (not nil), we have a leader state change, else this is at least our second try
+    (when leader (events/call-leader-change-fn raft-state*))
+    ;; for raft of just one server, become leader
+    (if (empty? other-servers)
+      (become-leader raft-state*)
+      raft-state*)))
+
+
+(defn new-command-event
+  "Processes new commands. Only happens if currently a raft leader."
+  [raft-state command-events]
+  (let [{:keys [this-server other-servers]} raft-state
+        raft-state* (loop [[cmd-event & r] command-events
+                           raft-state raft-state]
+                      (let [[_ command persist-callback] cmd-event
+                            {:keys [entry id timeout callback]} command
+                            new-index    (inc (:index raft-state))
+                            log-entry    {:term (:term raft-state) :entry entry :id id}
+                            _            (raft-log/write-new-command (:log-file raft-state) new-index log-entry)
+                            raft-state*  (-> raft-state
+                                             (assoc :index new-index)
+                                             ;; match-index majority used for updating leader-commit
+                                             (assoc-in [:servers this-server :match-index] new-index))
+                            raft-state** (if (fn? callback)
+                                           (events/register-callback-event raft-state* id timeout callback)
+                                           raft-state*)]
+                        (events/safe-callback persist-callback true)
+                        (if r
+                          (recur r raft-state**)
+                          raft-state**)))]
+    (if (empty? other-servers)
+      ;; single-server raft, automatically update commits
+      (events/update-commits raft-state* (:index raft-state*))
+      (queue-append-entries raft-state*))))
