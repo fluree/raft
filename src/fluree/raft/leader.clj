@@ -314,7 +314,8 @@
     (when leader (events/call-leader-change-fn raft-state*))
     ;; for raft of just one server, become leader
     (if (empty? other-servers)
-      (become-leader raft-state*)
+      (-> (become-leader raft-state*)
+          (events/update-commits (:index raft-state*)))
       raft-state*)))
 
 
