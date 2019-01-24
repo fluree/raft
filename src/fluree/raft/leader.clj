@@ -281,7 +281,6 @@
 (defn request-votes
   "Request votes for leadership from all followers."
   [raft-state]
-  (log/warn "Calling request-votes 2!")
   (let [{:keys [this-server other-servers index term config leader]} raft-state
         {:keys [event-chan]} config
         proposed-term (inc term)
