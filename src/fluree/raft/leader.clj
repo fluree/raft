@@ -135,6 +135,7 @@
   - term - current term of server - used to determine if we lost leadership
   - next-part - next part of the snapshot we should send, or nil/0 if we should send no more."
   [raft-state {:keys [server request response]}]
+  (log/debug "Install snapshot response from server: " server {:response response :request request})
   (let [raft-state* (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request)))
         {:keys [snapshot-index snapshot-term snapshot-part snapshot-parts]} request
         {:keys [term next-part]} response
@@ -185,6 +186,7 @@
   - If the response has success: false, we'll decrement that server's next-index and resend a new append-entry
     to that server immediately with older log entries."
   [raft-state {:keys [server request response]}]
+  (log/trace "Append entries response from server:" server {:response response :request request})
   (let [raft-state* (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request)))
         {:keys [term success]} response
         {:keys [prev-log-index entries]} request
@@ -222,6 +224,8 @@
 (defn- become-leader
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
   [raft-state]
+  (log/debug (format "Becoming leader, leader: %s, term: %s, latest index: %s."
+                     (:this-server raft-state) (:term raft-state) (:index raft-state)))
   (let [{:keys [this-server index servers]} raft-state
         heartbeat-time (get-in raft-state [:config :heartbeat-ms])
         next-index     (inc index)
@@ -243,6 +247,7 @@
 
 (defn request-vote-response-event
   [raft-state {:keys [server request response]}]
+  (log/debug "Request vote response from server " server {:response response :request request})
   (let [raft-state* (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request)))
         {:keys [status term]} raft-state*
         candidate?  (= :candidate status)]
@@ -309,6 +314,7 @@
                                             message  [:request-vote request callback]]
                                         (assoc-in state [:msg-queue server] message)))
                                     % other-servers)))]
+    (log/debug "Requesting leader votes: " request)
     ;; if we have current leader (not nil), we have a leader state change, else this is at least our second try
     (when leader (events/call-leader-change-fn raft-state*))
     ;; for raft of just one server, become leader

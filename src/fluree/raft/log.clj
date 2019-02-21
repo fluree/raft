@@ -1,6 +1,7 @@
 (ns fluree.raft.log
   (:require [clojure.java.io :as io]
-            [taoensso.nippy :as nippy])
+            [taoensso.nippy :as nippy]
+            [clojure.tools.logging :as log])
   (:import (java.io FileNotFoundException DataInputStream RandomAccessFile File)))
 
 
@@ -198,8 +199,10 @@
   "Returns term of specified index number."
   [file index]
   (or (get-index->term-cache index)
-      (assoc-index->term-cache
-        index (index->term* file index))))
+      (do
+        (log/trace (format "Index->term cache miss for index: %s." index))
+        (assoc-index->term-cache
+          index (index->term* file index)))))
 
 
 (defn remove-entries
@@ -207,6 +210,7 @@
 
   Changes index of removed entries to -1, so ignored by future reads."
   [^File file start-index]
+  (log/debug (format "Remove-entries called to remove all entries starting with: %s." start-index))
   ;; as a precaution, any time we remove entries clear the cache
   (clear-index->term-cache)
   (let [raf (RandomAccessFile. file "rw")
@@ -284,6 +288,7 @@
 (defn rotate-log
   "Rotates current log"
   [raft-state]
+  (log/debug "Rotate log called. Raft state: " raft-state)
   (let [{:keys [config snapshot-index snapshot-term voted-for term index log-file]} raft-state
         {:keys [log-directory log-history]} config
         entries-post-snapshot (read-entry-range log-file (inc snapshot-index))

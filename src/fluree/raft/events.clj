@@ -101,6 +101,7 @@
 (defn become-follower
   "Transition from a leader to a follower"
   [raft-state new-term new-leader-id]
+  (log/debug (format "Becoming follower, leader: %s and term: %s." new-leader-id new-term))
   (when (not= new-term (:term raft-state))
     (raft-log/write-current-term (:log-file raft-state) new-term))
   (let [raft-state* (-> raft-state
@@ -161,6 +162,8 @@
       (when trigger-snapshot?
         (let [term-at-commit    (raft-log/index->term (:log-file raft-state) commit)
               snapshot-callback (fn [& _] (async/put! (event-chan raft-state) [:snapshot [commit term-at-commit]]))]
+          (log/debug (format "Raft snapshot triggered at term %s, commit %s. Last snapshot: %s. Snapshot-threshold: %s."
+                             term-at-commit commit snapshot-index snapshot-threshold))
           (snapshot-write commit snapshot-callback)))
       (assoc raft-state :commit leader-commit
                         :snapshot-pending snapshot-pending
@@ -249,7 +252,7 @@
 
                                    :else
                                    {:term proposed-term :success false})]
-
+      (log/trace "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*})
       (callback response)
       raft-state*)))
 
@@ -309,6 +312,7 @@
                                                :status :follower
                                                ;; reset timeout if we voted so as to not possibly immediately start a new election
                                                :timeout (async/timeout (new-election-timeout raft-state)))))]
+    (log/debug "Request vote event: " {:args args :response response :raft-state raft-state*})
     (callback response)
     raft-state*))
 
@@ -326,6 +330,7 @@
   snapshot index and one interrupted process can exist while a new one starts, inadvertently concatenating two snapshots.
   "
   [raft-state snapshot-map callback]
+  (log/debug "Install snapshot called: " (pr-str (dissoc snapshot-map :snapshot-data)))
   (let [{:keys [snapshot-term snapshot-index snapshot-part snapshot-parts]} snapshot-map
         {:keys [term index config]} raft-state
         {:keys [snapshot-install snapshot-reify]} config

@@ -15,14 +15,9 @@
   (events/event-chan raft))
 
 (defn logfile
-  "Returns log file for raft."
+  "Returns log file name for raft."
   [raft]
   (:log-file raft))
-
-
-;(defn default-handler
-;  [raft operation data callback]
-;  (async/put! (events/event-chan raft) [operation data callback]))
 
 
 (defn invoke-rpc*
@@ -150,6 +145,9 @@
                     ;; raft state that we have a new snapshot
                     :snapshot
                     (let [[snapshot-index snapshot-term] data]
+                      (log/debug (format "Snapshot complete at index %s, term %s. Raft state last snapshot at %s, so %s."
+                                         snapshot-index snapshot-term (:snapshot-index raft-state) (if (<= snapshot-index (:snapshot-index raft-state))
+                                                                                                     "ignore" "update")))
                       (if (<= snapshot-index (:snapshot-index raft-state))
                         ;; in case callback triggered multiple times, ignore
                         raft-state
@@ -334,7 +332,7 @@
                                  :entries-max entries-max
                                  :entry-cache-size (or entry-cache-size entries-max) ;; we keep a local cache of last n entries, by default size of entries-max. Performance boost as most recent entry access does not require io
                                  )
-
+        _          (log/debug "Raft starting with config: " (pr-str config*))
         raft-state (-> {:config           config*
                         :this-server      this-server
                         :other-servers    (into [] (filter #(not= this-server %) servers))
@@ -354,5 +352,6 @@
                         :msg-queue        nil               ;; holds outgoing messages
                         }
                        (initialize-raft-state))]
+    (log/debug "Raft initialized state: " (pr-str raft-state))
     (event-loop raft-state)
     raft-state))
