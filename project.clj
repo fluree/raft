@@ -1,4 +1,4 @@
-(defproject fluree/raft "0.8.0"
+(defproject fluree/raft "0.8.1"
 
   :description "Fluree's library for fluree implementation"
 
