@@ -145,9 +145,8 @@
                     ;; raft state that we have a new snapshot
                     :snapshot
                     (let [[snapshot-index snapshot-term] data]
-                      (log/debug (format "Snapshot complete at index %s, term %s. Raft state last snapshot at %s, so %s."
-                                         snapshot-index snapshot-term (:snapshot-index raft-state) (if (<= snapshot-index (:snapshot-index raft-state))
-                                                                                                     "ignore" "update")))
+                      (log/debug (format "Snapshot complete at index %s, term %s. Raft state last snapshot at %s."
+                                         snapshot-index snapshot-term (:snapshot-index raft-state)))
                       (if (<= snapshot-index (:snapshot-index raft-state))
                         ;; in case callback triggered multiple times, ignore
                         raft-state
@@ -249,43 +248,51 @@
 
 (defn- initialize-raft-state
   [raft-state]
-  (let [{:keys [log-directory snapshot-reify]} (:config raft-state)
-        latest-log      (raft-log/latest-log-index log-directory)
-        latest-log-file (io/file log-directory (str latest-log ".raft"))
-        log-entries     (try (raft-log/read-log-file latest-log-file)
-                             (catch java.io.FileNotFoundException _ nil))
-        raft-state*     (reduce
-                          (fn [raft-state* entry]
-                            (let [[index term entry-type data] entry]
-                              (cond
-                                (> index 0)
-                                (assoc raft-state* :index index :term term)
+  (try
+    (let [{:keys [log-directory snapshot-reify]} (:config raft-state)
+          latest-log       (raft-log/latest-log-index log-directory)
+          latest-log-file  (io/file log-directory (str latest-log ".raft"))
+          log-entries      (try (raft-log/read-log-file latest-log-file)
+                                (catch java.io.FileNotFoundException _ nil))
+          raft-state*      (reduce
+                             (fn [raft-state* entry]
+                               (let [[index term entry-type data] entry]
+                                 (cond
+                                   (> index 0)
+                                   (assoc raft-state* :index index :term term)
 
-                                (= :current-term entry-type)
-                                (assoc raft-state* :term term
-                                                   :voted-for nil)
+                                   (= :current-term entry-type)
+                                   (assoc raft-state* :term term
+                                                      :voted-for nil)
 
-                                (= :voted-for entry-type)
-                                (if (= term (:term raft-state*))
-                                  (assoc raft-state* :voted-for data)
-                                  (assoc raft-state* :voted-for nil))
+                                   (= :voted-for entry-type)
+                                   (if (= term (:term raft-state*))
+                                     (assoc raft-state* :voted-for data)
+                                     (assoc raft-state* :voted-for nil))
 
-                                (= :snapshot entry-type)
-                                (assoc raft-state* :snapshot-index data
-                                                   :snapshot-term term)
+                                   (= :snapshot entry-type)
+                                   (assoc raft-state* :snapshot-index data
+                                                      :snapshot-term term)
 
-                                (= :no-op entry-type)
-                                raft-state*)))
-                          raft-state log-entries)
-        snapshot-index  (when (pos-int? (:snapshot-index raft-state*))
-                          (:snapshot-index raft-state*))]
-    ;; if a snapshot exists, reify it into the state-machine
-    (when snapshot-index
-      (snapshot-reify snapshot-index))
-
-    (cond-> (assoc raft-state* :log-file latest-log-file)
-            snapshot-index (assoc :index (max (:index raft-state*) snapshot-index)
-                                  :commit snapshot-index))))
+                                   (= :no-op entry-type)
+                                   raft-state*)))
+                             raft-state log-entries)
+          snapshot-index   (when (pos-int? (:snapshot-index raft-state*))
+                             (:snapshot-index raft-state*))
+          snapshot-loaded? (when snapshot-index             ;; if a snapshot exists, reify it into the state-machine
+                             (try
+                               (snapshot-reify snapshot-index)
+                               true
+                               (catch Exception e
+                                 (log/error e (str "Error reifying snapshot index: " snapshot-index))
+                                 false)))]
+      (if (and snapshot-index (not snapshot-loaded?))
+        raft-state
+        (cond-> (assoc raft-state* :log-file latest-log-file)
+                snapshot-index (assoc :index (max (:index raft-state*) snapshot-index)
+                                      :commit snapshot-index))))
+    (catch Exception e (log/error e "Error initializing raft state from logs in: "
+                                  (-> raft-state :config :log-directory)))))
 
 
 (defn start
@@ -333,7 +340,8 @@
                                  :entry-cache-size (or entry-cache-size entries-max) ;; we keep a local cache of last n entries, by default size of entries-max. Performance boost as most recent entry access does not require io
                                  )
         _          (log/debug "Raft starting with config: " (pr-str config*))
-        raft-state (-> {:config           config*
+        raft-state (-> {:id               (rand-int 100000) ;; opaque id, in case multiple raft processes are going
+                        :config           config*
                         :this-server      this-server
                         :other-servers    (into [] (filter #(not= this-server %) servers))
                         :status           nil               ;; candidate, leader, follower

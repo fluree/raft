@@ -161,7 +161,9 @@
       ;; we can continue to move forward.
       (when trigger-snapshot?
         (let [term-at-commit    (raft-log/index->term (:log-file raft-state) commit)
-              snapshot-callback (fn [& _] (async/put! (event-chan raft-state) [:snapshot [commit term-at-commit]]))]
+              snapshot-callback (fn [& _]
+                                  (log/trace "Snapshot callback called, sending message:" [:snapshot [commit term-at-commit]])
+                                  (async/put! (event-chan raft-state) [:snapshot [commit term-at-commit]]))]
           (log/debug (format "Raft snapshot triggered at term %s, commit %s. Last snapshot: %s. Snapshot-threshold: %s."
                              term-at-commit commit snapshot-index snapshot-threshold))
           (snapshot-write commit snapshot-callback)))

@@ -186,7 +186,7 @@
   - If the response has success: false, we'll decrement that server's next-index and resend a new append-entry
     to that server immediately with older log entries."
   [raft-state {:keys [server request response]}]
-  (log/trace "Append entries response from server:" server {:response response :request request})
+  (log/trace "Append entries response from server:" server {:response response :request (dissoc request :entries)})
   (let [raft-state* (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request)))
         {:keys [term success]} response
         {:keys [prev-log-index entries]} request
