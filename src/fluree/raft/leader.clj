@@ -2,7 +2,8 @@
   (:require [clojure.core.async :as async]
             [fluree.raft.log :as raft-log]
             [fluree.raft.events :as events]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [fluree.raft.watch :as watch]))
 
 
 (defn update-server-stats
@@ -241,7 +242,7 @@
                                          :leader this-server
                                          :servers servers*
                                          :timeout (async/timeout heartbeat-time))]
-    (events/call-leader-change-fn raft-state*)
+    (watch/call-leader-watch :become-leader raft-state raft-state*)
     (queue-append-entries raft-state*)))
 
 
@@ -316,7 +317,7 @@
                                     % other-servers)))]
     (log/debug "Requesting leader votes: " request)
     ;; if we have current leader (not nil), we have a leader state change, else this is at least our second try
-    (when leader (events/call-leader-change-fn raft-state*))
+    (when leader (watch/call-leader-watch :become-follower raft-state raft-state*))
     ;; for raft of just one server, become leader
     (if (empty? other-servers)
       (-> (become-leader raft-state*)

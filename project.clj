@@ -1,6 +1,6 @@
-(defproject fluree/raft "0.8.1"
+(defproject fluree/raft "0.9.0"
 
-  :description "Fluree's library for fluree implementation"
+  :description "Raft library in Clojure used by Fluree."
 
   :author "Brian Platz"
 

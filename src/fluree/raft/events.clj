@@ -1,7 +1,8 @@
 (ns fluree.raft.events
   (:require [clojure.core.async :as async]
             [fluree.raft.log :as raft-log]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [fluree.raft.watch :as watch]))
 
 ;; general events/functions for all raft servers (not leader-specific)
 
@@ -89,15 +90,6 @@
                                :after   (dissoc state-after :config)})))
 
 
-(defn call-leader-change-fn
-  "If exists, calls leader change function."
-  [raft-state]
-  (when-let [leader-change (get-in raft-state [:config :leader-change])]
-    (when (fn? leader-change)
-      (try (leader-change raft-state)
-           (catch Exception e (log/error e "Exception calling leader-change function."))))))
-
-
 (defn become-follower
   "Transition from a leader to a follower"
   [raft-state new-term new-leader-id]
@@ -112,7 +104,7 @@
                                :msg-queue nil
                                :timeout (async/timeout (new-election-timeout raft-state)))
                         (reset-server-state))]
-    (call-leader-change-fn raft-state*)
+    (watch/call-leader-watch :become-follower raft-state raft-state*)
     raft-state*))
 
 

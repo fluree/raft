@@ -4,7 +4,8 @@
             [clojure.tools.logging :as log]
             [fluree.raft.log :as raft-log]
             [fluree.raft.leader :as leader]
-            [fluree.raft.events :as events])
+            [fluree.raft.events :as events]
+            [fluree.raft.watch :as watch])
   (:import (java.util UUID)))
 
 (defrecord RaftCommand [entry id timeout callback])
@@ -341,6 +342,9 @@
                                  )
         _          (log/debug "Raft starting with config: " (pr-str config*))
         raft-state (-> {:id               (rand-int 100000) ;; opaque id, in case multiple raft processes are going
+                        :watch-fns        (atom (if leader-change-fn
+                                                  {::default {:fn leader-change-fn :event-type nil}}
+                                                  {}))
                         :config           config*
                         :this-server      this-server
                         :other-servers    (into [] (filter #(not= this-server %) servers))
@@ -363,3 +367,30 @@
     (log/debug "Raft initialized state: " (pr-str raft-state))
     (event-loop raft-state)
     raft-state))
+
+
+(defn add-leader-watch
+  "Registers a function to be called with each leader change. Specify any key
+  which can be used to unregister function later.
+
+  Function will be called with one four args: key, event-type, raft-state before the leader change
+  and raft-state after the leader change.
+
+  If key is already in use, overwrites existing watch function with fn.
+
+  Optionally register for a specific event-type. When no event-type is specified,
+  triggers for all leader change events.
+
+  event-types are:
+  - :become-leader - triggered when this server becomes leader
+  - :become-follower - triggered when this server becomes a follower (was leader)
+  "
+  ([raft key fn] (watch/add-leader-watch raft key fn nil))
+  ([raft key fn event-type]
+   (watch/add-leader-watch raft key fn event-type)))
+
+
+(defn remove-leader-watch
+  "Removes watch function with specified key."
+  [raft key]
+  (watch/remove-leader-watch raft key))
