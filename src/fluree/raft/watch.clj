@@ -23,6 +23,10 @@
   Function will be called with one four args: key, event-type, raft-state before the leader change
   and raft-state after the leader change.
 
+  Important! Function is called synchronously, and therefore RAFT is stopped while processing.
+  If function requires raft calls, it *must* be run asynchronously.
+  Good to run asynchronously for anything that might be slow.
+
   If key is already in use, overwrites existing watch function with fn.
 
   Optionally register for a specific event-type. When no event-type is specified,
