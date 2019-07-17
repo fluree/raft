@@ -304,7 +304,7 @@
                 send-rpc-fn default-command-timeout close-fn
                 leader-change-fn                            ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
                 event-chan command-chan
-                entries-max entry-cache-size]
+                entries-max entry-cache-size rejoin?]
          :or   {timeout-ms              500                 ;; election timeout, good range is 10ms->500ms
                 heartbeat-ms            100                 ;; heartbeat time in milliseconds
                 log-history             10                  ;; number of historical log files to retain
@@ -356,17 +356,19 @@
                         :snapshot-index   0                 ;; index point of last snapshot
                         :snapshot-term    0                 ;; term of last snapshot
                         :snapshot-pending nil               ;; holds pending commit if snapshot was requested
-                        :commit           0                 ;; commit point in index
+                        :commit           (if rejoin? nil 0) ;; commit point in index
                         :voted-for        nil               ;; for the :term specified above, who we voted for
 
                         ;; map of servers participating in consensus. server id is key, state of server is val
                         :servers          (reduce #(assoc %1 %2 events/server-state-baseline) {} servers) ;; will be set up by leader/reset-server-state
                         :msg-queue        nil               ;; holds outgoing messages
                         }
+
                        (initialize-raft-state))]
     (log/debug "Raft initialized state: " (pr-str raft-state))
     (event-loop raft-state)
     raft-state))
+
 
 
 (defn add-leader-watch
