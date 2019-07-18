@@ -139,10 +139,9 @@
   [raft-state leader-commit]
   (if (= (:commit raft-state) leader-commit)
     raft-state                                              ;; no change
-    (let [{:keys [commit snapshot-index config snapshot-pending]} raft-state
+    (let [{:keys [commit snapshot-index config snapshot-pending command-callbacks]} raft-state
           {:keys [state-machine snapshot-threshold snapshot-write]} config
           commit-entries    (raft-log/read-entry-range (:log-file raft-state) (inc commit) leader-commit)
-          command-callbacks (:command-callbacks raft-state)
           trigger-snapshot? (and (>= commit (+ snapshot-index snapshot-threshold))
                                  (not snapshot-pending))
           snapshot-pending  (if trigger-snapshot?

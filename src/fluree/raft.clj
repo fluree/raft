@@ -49,7 +49,7 @@
 
   This means all state changes are single-threaded.
 
-  Maintains appropriate timeouts (hearbeat if leader, or election timeout if not leader)
+  Maintains appropriate timeouts (heartbeat if leader, or election timeout if not leader)
   to trigger appropriate actions when no activity happens between timeouts.
 
 
