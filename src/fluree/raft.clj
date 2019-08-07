@@ -356,7 +356,7 @@
                         :snapshot-index   0                 ;; index point of last snapshot
                         :snapshot-term    0                 ;; term of last snapshot
                         :snapshot-pending nil               ;; holds pending commit if snapshot was requested
-                        :commit           (if rejoin? nil 0) ;; commit point in index
+                        :commit           0                 ;; commit point in index
                         :voted-for        nil               ;; for the :term specified above, who we voted for
 
                         ;; map of servers participating in consensus. server id is key, state of server is val

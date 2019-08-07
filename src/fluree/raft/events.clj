@@ -197,8 +197,8 @@
                                    )
           new-leader?            (or (> proposed-term term) (not= leader-id leader))
           logs-match?            (= prev-log-term term-at-prev-log-index)
-          new-timeout            (async/timeout (new-election-timeout raft-state))
-          raft-state*            (cond-> (assoc raft-state :timeout new-timeout)
+          new-timeout-ms         (new-election-timeout raft-state)
+          raft-state*            (cond-> (assoc raft-state :leader-commit leader-commit)
 
                                          ;; leader's term is newer, update leader info
                                          new-leader?
@@ -247,7 +247,7 @@
                                    {:term proposed-term :success false})]
       (log/trace "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*})
       (callback response)
-      raft-state*)))
+      (assoc raft-state* :timeout (async/timeout new-timeout-ms)))))
 
 
 (defn request-vote-event
