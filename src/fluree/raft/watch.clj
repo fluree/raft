@@ -52,10 +52,11 @@
 
 (defn call-leader-watch
   "Used internally to call registered leader watch functions."
-  [event-type old-raft-state new-raft-state]
-  (let [watches @(watch-fn-atom new-raft-state)]
+  [change-map]
+  (let [{:keys [event new-raft-state]} change-map
+        watches @(watch-fn-atom new-raft-state)]
     (doseq [[k {watch-event :event-type watch-fn :fn}] watches]
       (when (or (nil? watch-event)
-                (= watch-event event-type))
-        (try (watch-fn k event-type old-raft-state new-raft-state)
+                (= watch-event event))
+        (try (watch-fn (assoc change-map :key k))
              (catch Exception e (log/error e (str "Error executing leader watch function: " (pr-str k)))))))))

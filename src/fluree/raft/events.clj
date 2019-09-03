@@ -75,36 +75,36 @@
 
 (defn call-monitor-fn
   "Internal - calls monitor function safely and calcs time."
-  [event state-before state-after start-time-ns]
-  (log/trace {:op      (first event)
-              :time    (format "%.3fms" (double (/ (- (System/nanoTime) start-time-ns) 1e6)))
-              :data    (second event)
-              :before  (dissoc state-before :config)
-              :after   (dissoc state-after :config)
-              :instant (System/currentTimeMillis)})
+  [state-after op data state-before start-time-ns]
   (when-let [monitor-fn (:monitor-fn state-after)]
     (safe-callback monitor-fn {:time    (format "%.3fms" (double (/ (- (System/nanoTime) start-time-ns) 1e6)))
                                :instant (System/currentTimeMillis)
-                               :event   event
+                               :event   [op data]
                                :before  (dissoc state-before :config)
-                               :after   (dissoc state-after :config)})))
+                               :after   (dissoc state-after :config)}))
+  state-after)
 
 
 (defn become-follower
   "Transition from a leader to a follower"
-  [raft-state new-term new-leader-id]
+  [raft-state new-term new-leader-id cause]
   (log/debug (format "Becoming follower, leader: %s and term: %s." new-leader-id new-term))
   (when (not= new-term (:term raft-state))
     (raft-log/write-current-term (:log-file raft-state) new-term))
-  (let [raft-state* (-> raft-state
+  (let [new-timeout (new-election-timeout raft-state)
+        raft-state* (-> raft-state
                         (assoc :term new-term
                                :status :follower
                                :leader new-leader-id
                                :voted-for nil
                                :msg-queue nil
-                               :timeout (async/timeout (new-election-timeout raft-state)))
+                               :timeout (async/timeout new-timeout)
+                               :timeout-ms new-timeout
+                               :timeout-at (+ new-timeout (System/currentTimeMillis)))
                         (reset-server-state))]
-    (watch/call-leader-watch :become-follower raft-state raft-state*)
+    (watch/call-leader-watch (assoc cause :event :become-follower
+                                          :new-raft-state raft-state
+                                          :old-raft-state raft-state*))
     raft-state*))
 
 
@@ -182,7 +182,7 @@
       (callback {:term (:term raft-state) :success false})
       raft-state)
     ;; current or newer term
-    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
+    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit instant]} args
           proposed-term          (:term args)
           {:keys [term index snapshot-index leader]} raft-state
           term-at-prev-log-index (cond
@@ -198,16 +198,25 @@
                                    )
           new-leader?            (or (> proposed-term term) (not= leader-id leader))
           logs-match?            (= prev-log-term term-at-prev-log-index)
-          new-timeout            (async/timeout (new-election-timeout raft-state))
-          raft-state*            (cond-> (assoc raft-state :timeout new-timeout)
+          new-timeout-ms         (new-election-timeout raft-state)
+          raft-state*            (cond-> raft-state
 
                                          ;; leader's term is newer, update leader info
                                          new-leader?
-                                         (#(do
+                                         (#(let [cause {:cause      :append-entries
+                                                        :old-leader leader
+                                                        :new-leader leader-id
+                                                        :message    (if (> proposed-term term)
+                                                                      (str "Append entries term " proposed-term
+                                                                           " is newer than current term " term ".")
+                                                                      (str "Append entries leader " leader-id
+                                                                           " for current term, " term ", is different than "
+                                                                           "currently leader: " leader "."))
+                                                        :server     (:this-server raft-state)}]
                                              (when (> index prev-log-index)
                                                ;; it is possible we have log entries after the leader's latest, remove them
                                                (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
-                                             (become-follower % proposed-term leader-id)))
+                                             (become-follower % proposed-term leader-id cause)))
 
                                          ;; we have a log match at prev-log-index
                                          (and logs-match? (not-empty entries))
@@ -248,65 +257,97 @@
                                    {:term proposed-term :success false})]
       (log/trace "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*})
       (callback response)
-      raft-state*)))
+      (assoc raft-state* :timeout (async/timeout new-timeout-ms)
+                         :timeout-ms new-timeout-ms
+                         :timeout-at (+ new-timeout-ms (System/currentTimeMillis))))))
 
 
 (defn request-vote-event
   "Grant vote to server requesting leadership if:
   - proposed term is >= current term
   - we haven't already voted for someone for this term
-  - log index + term is at least as far as our log
-  "
+  - log index + term is at least as far as our log.
+
+  If we will reject vote because the log index is not as current as ours,
+  and we are the current leader, immediately kick off a request vote of our own
+  as it is likely a follower was just slow receiving our append entries request
+  and this can get things back on track quickly."
   [raft-state args callback]
   (let [{:keys [candidate-id last-log-index last-log-term]} args
-        proposed-term    (:term args)
-        {:keys [index term log-file voted-for snapshot-index snapshot-term]} raft-state
-        my-last-log-term (cond
-                           (= 0 index) 0
-                           (> last-log-index snapshot-index) (raft-log/index->term log-file index)
-                           (= last-log-index snapshot-index) snapshot-term
-                           :else nil)
+        proposed-term     (:term args)
+        {:keys [index term log-file voted-for snapshot-index snapshot-term status]} raft-state
+        my-last-log-term  (cond
+                            (= 0 index) 0
+                            (> last-log-index snapshot-index) (raft-log/index->term log-file index)
+                            (= last-log-index snapshot-index) snapshot-term
+                            :else nil)
 
-        reject-vote?     (or (< proposed-term term)         ;; request is for an older term
-                             (and (= proposed-term term)    ;; make sure we haven't already voted for someone in this term
-                                  (not (nil? voted-for)))
-                             (nil? my-last-log-term)        ;; old index we don't have any longer
-                             (< last-log-term my-last-log-term) ;; if log term is older, reject
-                             (and (= last-log-term my-last-log-term) ;; if log term is same, my index must not be longer
-                                  (< last-log-index index)))
+        have-newer-index? (and (= last-log-term my-last-log-term) ;; if log term is same, my index must not be longer
+                               (< last-log-index index))
 
-        response         (if reject-vote?
-                           {:term         (max term proposed-term)
-                            :vote-granted false
-                            :reason       (cond (< proposed-term term)
-                                                (format "Proposed term %s is less than current term %s." proposed-term term)
+        reject-vote?      (or (< proposed-term term)        ;; request is for an older term
+                              (and (= proposed-term term)   ;; make sure we haven't already voted for someone in this term
+                                   (not (nil? voted-for)))
+                              (nil? my-last-log-term)       ;; old index we don't have any longer
+                              (< last-log-term my-last-log-term) ;; if log term is older, reject
+                              have-newer-index?)
 
-                                                (and (= proposed-term term) ;; make sure we haven't already voted for someone in this term
-                                                     (not (nil? voted-for)))
-                                                (format "Already voted for %s in term %s." voted-for proposed-term)
+        newer-term?       (> proposed-term term)
 
-                                                (nil? my-last-log-term)
-                                                (format "Last log index %s is older than our most recent snapshot index: %s." last-log-index snapshot-index)
+        response          (if reject-vote?
+                            {:term         (max term proposed-term)
+                             :vote-granted false
+                             :reason       (cond (< proposed-term term)
+                                                 (format "Proposed term %s is less than current term %s." proposed-term term)
 
-                                                (< last-log-term my-last-log-term)
-                                                (format "For index %s, provided log term of %s is less than our log term of %s." last-log-index last-log-term my-last-log-term)
+                                                 (and (= proposed-term term) ;; make sure we haven't already voted for someone in this term
+                                                      (not (nil? voted-for)))
+                                                 (format "Already voted for %s in term %s." voted-for proposed-term)
 
-                                                (and (= last-log-term my-last-log-term) ;; if log term is same, my index must not be longer
-                                                     (< last-log-index index))
-                                                (format "For index %s the terms are the same: %s, but our index is longer: %s." last-log-index last-log-term index)
-                                                )}
-                           {:term proposed-term :vote-granted true})
-        raft-state*      (if reject-vote?
-                           (assoc raft-state :term (max term proposed-term))
-                           (do
-                             (raft-log/write-current-term (:log-file raft-state) proposed-term)
-                             (raft-log/write-voted-for (:log-file raft-state) proposed-term candidate-id)
-                             (assoc raft-state :term proposed-term
-                                               :voted-for candidate-id
-                                               :status :follower
-                                               ;; reset timeout if we voted so as to not possibly immediately start a new election
-                                               :timeout (async/timeout (new-election-timeout raft-state)))))]
-    (log/debug "Request vote event: " {:args args :response response :raft-state raft-state*})
+                                                 (nil? my-last-log-term)
+                                                 (format "Last log index %s is older than our most recent snapshot index: %s." last-log-index snapshot-index)
+
+                                                 (< last-log-term my-last-log-term)
+                                                 (format "For index %s, provided log term of %s is less than our log term of %s." last-log-index last-log-term my-last-log-term)
+
+                                                 have-newer-index?
+                                                 (format "For index %s the terms are the same: %s, but our index is longer: %s." last-log-index last-log-term index)
+                                                 )}
+                            {:term proposed-term :vote-granted true})
+        raft-state*       (cond
+                            ;; we gave our vote, register
+                            (not reject-vote?)
+                            (let [new-timeout (new-election-timeout raft-state)]
+                              (raft-log/write-current-term (:log-file raft-state) proposed-term)
+                              (raft-log/write-voted-for (:log-file raft-state) proposed-term candidate-id)
+                              (assoc raft-state :term proposed-term
+                                                :voted-for candidate-id
+                                                :status :follower
+                                                ;; reset timeout if we voted so as to not possibly immediately start a new election
+                                                :timeout (async/timeout new-timeout)
+                                                :timeout-ms new-timeout
+                                                :timeout-at (+ new-timeout (System/currentTimeMillis))))
+
+                            ;; rejected, but was for newer term and we were the last leader
+                            ;; likely triggered by slow/temporarily disconnected consumer
+                            ;; initiate a new vote immediately to try and regain leadership
+                            (and newer-term? (= :leader status))
+                            (assoc raft-state :trigger-request-vote true
+                                              :status :candidate
+                                              :term proposed-term)
+
+                            ;; rejected but request was for newer term than current
+                            ;; we can still cast a vote for another server at this newer term
+                            ;; if we were a candidate for the older term, give up
+                            newer-term?
+                            (assoc raft-state :term proposed-term
+                                              :voted-for nil
+                                              :status :follower)
+
+                            ;; rejected, but was for an older or same term. Nothing to do.
+                            :else
+                            raft-state)]
+    (log/debug "Request vote event, responding: " {:response response :args args :raft-state raft-state*})
     (callback response)
     raft-state*))
 

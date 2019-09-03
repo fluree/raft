@@ -64,30 +64,40 @@
   - raft-state            - provides current state of raft to a callback function provided.
   - close                 - gracefully closes down raft"
   [raft-state]
-  (let [event-chan   (events/event-chan raft-state)
-        command-chan (get-in raft-state [:config :command-chan])
-        heartbeat-ms (get-in raft-state [:config :heartbeat-ms])]
-    (async/go-loop [raft-state (assoc raft-state :timeout (async/timeout (+ heartbeat-ms (rand-int heartbeat-ms))))]
+  (let [event-chan      (events/event-chan raft-state)
+        command-chan    (get-in raft-state [:config :command-chan])
+        init-timeout    (events/new-election-timeout raft-state)
+        init-raft-state (assoc raft-state :timeout (async/timeout init-timeout)
+                                          :timeout-ms init-timeout
+                                          :timeout-at (+ init-timeout (System/currentTimeMillis)))]
+    (async/go-loop [raft-state init-raft-state
+                    last-stop (System/nanoTime)]            ;; start time of last operation
       (let [timeout-chan (:timeout raft-state)
             [event c] (async/alts! [event-chan command-chan timeout-chan] :priority true)
-            [op data callback] event
+            [op data callback] (if (= c timeout-chan)       ;; timeout!
+                                 [:timeout]
+                                 event)
             timeout?     (= c timeout-chan)
             start-time   (System/nanoTime)]
-        (cond
+        (log/debug (format "%s ..... raft event: %-25s idle: %10s timeout-in: %5sms timeout at: %s (%s) event-data: %s"
+                           (str (java.time.Instant/now))
+                           (str op)
+                           (format "%.3fms" (double (/ (- start-time last-stop) 1e6)))
+                           (str (- (:timeout-at raft-state) (System/currentTimeMillis)))
+                           (:timeout-at raft-state)
+                           (:timeout-ms raft-state)
+                           data))
+        (if
           (and (nil? event) (not timeout?))
           :raft-closed
-
-          timeout?
-          (-> (if (leader/is-leader? raft-state)
-                (leader/queue-append-entries raft-state)
-                (leader/request-votes raft-state))
-              (events/send-queued-messages)
-              (recur))
-
-          :else
           (let [raft-state*
                 (try
                   (case op
+
+                    :timeout
+                    (if (leader/is-leader? raft-state)
+                      (leader/queue-append-entries raft-state)
+                      (leader/request-votes raft-state))
 
                     ;; returns current raft state to provided callback
                     :raft-state
@@ -136,7 +146,14 @@
                       (events/register-callback-event raft-state command-id timeout callback))
 
                     :request-vote
-                    (events/request-vote-event raft-state data callback)
+                    (let [new-raft (events/request-vote-event raft-state data callback)]
+                      (if (true? (:trigger-request-vote new-raft))
+                        ;; special case where slow consumer triggered vote and we are the last leader,
+                        ;; try to regain leadership without waiting for next timeout
+                        (-> new-raft
+                            (dissoc :trigger-request-vote)
+                            (leader/request-votes))
+                        new-raft))
 
                     ;; response for request-vote requests - may become leader if enough votes received
                     :request-vote-response
@@ -187,11 +204,17 @@
                   (catch Exception e (throw (ex-info (str "Raft error processing command: " op)
                                                      {:data       data
                                                       :raft-state raft-state} e))))]
-            (events/call-monitor-fn event raft-state raft-state* start-time)
+            (log/trace {:op     op
+                        :inst   (System/currentTimeMillis)
+                        :time   (format "%.3fms" (double (/ (- (System/nanoTime) start-time) 1e6)))
+                        :event  [op data]
+                        :before (dissoc raft-state :config :log-file :watch-fns :timeout)
+                        :after  (dissoc raft-state* :config :log-file :watch-fns :timeout)})
             (when (not= :close op)
               (-> raft-state*
+                  (events/call-monitor-fn op data raft-state start-time)
                   (events/send-queued-messages)
-                  (recur)))))))))
+                  (recur (System/nanoTime))))))))))
 
 
 (defn register-callback
@@ -373,22 +396,27 @@
   "Registers a function to be called with each leader change. Specify any key
   which can be used to unregister function later.
 
-  Function will be called with one four args: key, event-type, raft-state before the leader change
-  and raft-state after the leader change.
+  Function is called only when the leader change is of specified event-type, either
+  :become-leader or :become-follower. To get called for all changes, specify an event-type
+  of nil (default).
+
+  Function is a single-argument function that is called with a map that contains information
+  related to the leadership change. Keys of the map include:
+  - :key            - original key the function was registered with
+  - :event          - values will be either :become-follower or :become-leader
+  - :cause          - Keyword for the cause of the event, namely the raft action that precipated the change
+  - :message        - String with a nice message explaining the cause
+  - :old-leader     - the leader before this change (will be nil or leader's name)
+  - :new-leader     - leader after this change (will be nil or leader's name)
+  - :old-raft-state - raft state right before the change
+  - :new-raft-state - raft state after the change
+  - :server         - this server's name
 
   Important! Function is called synchronously, and therefore RAFT is stopped while processing.
   If function requires raft calls, it *must* be run asynchronously.
   Good to run asynchronously for anything that might be slow.
 
-  If key is already in use, overwrites existing watch function with fn.
-
-  Optionally register for a specific event-type. When no event-type is specified,
-  triggers for all leader change events.
-
-  event-types are:
-  - :become-leader - triggered when this server becomes leader
-  - :become-follower - triggered when this server becomes a follower (was leader)
-  "
+  If key is already in use, overwrites existing watch function with fn."
   ([raft key fn] (watch/add-leader-watch raft key fn nil))
   ([raft key fn event-type]
    (watch/add-leader-watch raft key fn event-type)))

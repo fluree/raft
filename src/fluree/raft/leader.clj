@@ -149,7 +149,14 @@
 
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state*))
-      (events/become-follower raft-state* term nil)
+      (let [cause {:cause      :install-snapshot-response
+                   :old-leader (:this-server raft-state)
+                   :new-leader nil
+                   :message    (str "Install snapshot response from server " server
+                                    " returned term " term ", and current term is "
+                                    (:term raft-state*) ".")
+                   :server     (:this-server raft-state)}]
+        (events/become-follower raft-state* term nil cause))
 
       done?
       (-> raft-state*
@@ -171,11 +178,17 @@
   [raft-state]
   (let [{:keys [other-servers]} raft-state
         heartbeat-time (get-in raft-state [:config :heartbeat-ms])]
+    (log/trace "Raft leader queue sending append-entry. " {:instant        (System/currentTimeMillis)
+                                                           :heartbeat-ms   heartbeat-time
+                                                           :next-heartbeat (+ (System/currentTimeMillis)
+                                                                              heartbeat-time)})
     (-> (reduce (fn [raft-state* server]
                   (queue-append-entry raft-state* server))
                 raft-state
                 other-servers)
-        (assoc :timeout (async/timeout heartbeat-time)))))
+        (assoc :timeout (async/timeout heartbeat-time)
+               :timeout-ms heartbeat-time
+               :timeout-at (+ heartbeat-time (System/currentTimeMillis))))))
 
 
 (defn append-entries-response-event
@@ -199,8 +212,15 @@
 
       ;; response has a newer term, go to follower status and reset election timeout
       (> term (:term raft-state*))
-      (-> raft-state*
-          (events/become-follower term nil))
+      (let [cause {:cause      :append-entries-response
+                   :old-leader (:this-server raft-state)
+                   :new-leader nil
+                   :message    (str "Append entries response from server " server
+                                    " returned term " term ", and current term is "
+                                    (:term raft-state*) ".")
+                   :server     (:this-server raft-state)}]
+        (-> raft-state*
+            (events/become-follower term nil cause)))
 
       ;; update successful
       (true? success)
@@ -241,8 +261,20 @@
         raft-state*    (assoc raft-state :status :leader
                                          :leader this-server
                                          :servers servers*
-                                         :timeout (async/timeout heartbeat-time))]
-    (watch/call-leader-watch :become-leader raft-state raft-state*)
+                                         :timeout (async/timeout heartbeat-time)
+                                         :timeout-ms heartbeat-time
+                                         :timeout-at (+ heartbeat-time (System/currentTimeMillis)))]
+    (watch/call-leader-watch {:event          :become-leader
+                              :cause          :become-leader
+                              :old-leader     (:leader raft-state)
+                              :new-leader     this-server
+                              :message        (str "This server, " this-server
+                                                   ", received the majority of the votes to become leader. "
+                                                   "New term: " (:term raft-state) ", latest index: "
+                                                   (:index raft-state) ".")
+                              :server         this-server
+                              :new-raft-state raft-state
+                              :old-raft-state raft-state*})
     (queue-append-entries raft-state*)))
 
 
@@ -255,7 +287,14 @@
     (cond
       ;; remote server is newer term, become follower
       (> (:term response) term)
-      (events/become-follower raft-state* (:term response) nil)
+      (let [cause {:cause      :request-vote-response
+                   :old-leader (:leader raft-state)
+                   :new-leader nil
+                   :message    (str "Request votes response from server " server
+                                    " returned term " term ", and current term is "
+                                    (:term raft-state*) ".")
+                   :server     (:this-server raft-state)}]
+        (events/become-follower raft-state* (:term response) nil cause))
 
       ;; we are no longer a candidate since sending this event, ignore
       (not candidate?)
@@ -317,7 +356,17 @@
                                     % other-servers)))]
     (log/debug "Requesting leader votes: " request)
     ;; if we have current leader (not nil), we have a leader state change, else this is at least our second try
-    (when leader (watch/call-leader-watch :become-follower raft-state raft-state*))
+    (when leader
+      (watch/call-leader-watch {:event          :become-follower
+                                :cause          :request-votes
+                                :old-leader     (:leader raft-state)
+                                :new-leader     nil
+                                :message        (str "The leader '" leader "' hasn't been heard from within the timeout. "
+                                                     "This server is now requesting leadership votes for a proposed term: "
+                                                     proposed-term " and an index point: " index ".")
+                                :server         this-server
+                                :new-raft-state raft-state
+                                :old-raft-state raft-state*}))
     ;; for raft of just one server, become leader
     (if (empty? other-servers)
       (-> (become-leader raft-state*)
