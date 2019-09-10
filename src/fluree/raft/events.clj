@@ -184,6 +184,7 @@
     ;; current or newer term
     (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit instant]} args
           proposed-term          (:term args)
+          proposed-new-index     (+ prev-log-index (count entries))
           {:keys [term index snapshot-index leader]} raft-state
           term-at-prev-log-index (cond
                                    (= 0 prev-log-index) 0
@@ -211,16 +212,18 @@
                                                                            " is newer than current term " term ".")
                                                                       (str "Append entries leader " leader-id
                                                                            " for current term, " term ", is different than "
-                                                                           "currently leader: " leader "."))
+                                                                           "current leader: " leader "."))
                                                         :server     (:this-server raft-state)}]
                                              (when (> index prev-log-index)
                                                ;; it is possible we have log entries after the leader's latest, remove them
                                                (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
-                                             (become-follower % proposed-term leader-id cause)))
+                                             (-> %
+                                                 (assoc :latest-index proposed-new-index)
+                                                 (become-follower proposed-term leader-id cause))))
 
                                          ;; we have a log match at prev-log-index
                                          (and logs-match? (not-empty entries))
-                                         (#(let [new-index (+ prev-log-index (count entries))]
+                                         (#(do
                                              (if (or (= index prev-log-index) new-leader?)
 
                                                ;; new entries, so add. If new leader, possibly over-write existing entries
@@ -229,22 +232,24 @@
                                                ;; Possibly new entries and no leader change.
                                                ;; At least some of these entries duplicate ones already received.
                                                ;; Happens when round-trip response doesn't complete prior to new updates being sent
-                                               (let [new-entries-n (- new-index index)
+                                               (let [new-entries-n (- proposed-new-index index)
                                                      new-entries   (take-last new-entries-n entries)]
                                                  (when new-entries
                                                    (raft-log/append (:log-file %) new-entries index index))))
 
                                              ;; as an optimization, we will cache last entry as it will likely be requested next
-                                             (raft-log/assoc-index->term-cache new-index (:term (last entries)))
+                                             (raft-log/assoc-index->term-cache proposed-new-index (:term (last entries)))
 
-                                             (assoc % :index new-index)))
+                                             (assoc % :index proposed-new-index
+                                                      :latest-index proposed-new-index)))
 
 
                                          ;; we have an entry at prev-log-index, but doesn't match term, remove offending entries
                                          (and (not logs-match?) term-at-prev-log-index)
                                          (#(do
                                              (raft-log/remove-entries (:log-file %) prev-log-index)
-                                             (assoc % :index (dec prev-log-index))))
+                                             (assoc % :index (dec prev-log-index)
+                                                      :latest-index proposed-new-index)))
 
                                          ;; Check if commit is newer and process into state machine if needed
                                          logs-match?
@@ -255,7 +260,9 @@
 
                                    :else
                                    {:term proposed-term :success false})]
-      (log/trace "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*})
+      (if (empty? entries)                                  ;; only debug log entries with data
+        (log/trace "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*})
+        (log/debug "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*}))
       (callback response)
       (assoc raft-state* :timeout (async/timeout new-timeout-ms)
                          :timeout-ms new-timeout-ms
@@ -277,8 +284,11 @@
         proposed-term     (:term args)
         {:keys [index term log-file voted-for snapshot-index snapshot-term status]} raft-state
         my-last-log-term  (cond
+                            ;; initial raft state 0, so use term 0
                             (= 0 index) 0
+                            ;; last log index is beyond our latest snapshot, so get term from current log file
                             (> last-log-index snapshot-index) (raft-log/index->term log-file index)
+                            ;; last-log-index is same as latest snapshot, to use snapshot's term
                             (= last-log-index snapshot-index) snapshot-term
                             :else nil)
 
@@ -323,6 +333,7 @@
                               (assoc raft-state :term proposed-term
                                                 :voted-for candidate-id
                                                 :status :follower
+                                                :latest-index (max (:latest-index raft-state) last-log-index)
                                                 ;; reset timeout if we voted so as to not possibly immediately start a new election
                                                 :timeout (async/timeout new-timeout)
                                                 :timeout-ms new-timeout

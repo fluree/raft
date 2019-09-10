@@ -79,7 +79,7 @@
                                  event)
             timeout?     (= c timeout-chan)
             start-time   (System/nanoTime)]
-        (log/debug (format "%s ..... raft event: %-25s idle: %10s timeout-in: %5sms timeout at: %s (%s) event-data: %s"
+        (log/trace (format "%s ..... raft event: %-25s idle: %10s timeout-in: %5sms timeout at: %s (%s) event-data: %s"
                            (str (java.time.Instant/now))
                            (str op)
                            (format "%.3fms" (double (/ (- start-time last-stop) 1e6)))
@@ -380,6 +380,7 @@
                         :snapshot-term    0                 ;; term of last snapshot
                         :snapshot-pending nil               ;; holds pending commit if snapshot was requested
                         :commit           0                 ;; commit point in index
+                        :latest-index     0                 ;; most recent index we've heard about from a valid leader (used to determine if we are catching up.. index < latest-index)
                         :voted-for        nil               ;; for the :term specified above, who we voted for
 
                         ;; map of servers participating in consensus. server id is key, state of server is val

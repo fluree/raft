@@ -386,7 +386,8 @@
                             log-entry    {:term (:term raft-state) :entry entry :id id}
                             _            (raft-log/write-new-command (:log-file raft-state) new-index log-entry)
                             raft-state*  (-> raft-state
-                                             (assoc :index new-index)
+                                             (assoc :index new-index
+                                                    :latest-index new-index)
                                              ;; match-index majority used for updating leader-commit
                                              (assoc-in [:servers this-server :match-index] new-index))
                             raft-state** (if (fn? callback)
