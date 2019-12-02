@@ -139,7 +139,7 @@
   [raft-state leader-commit]
   (if (= (:commit raft-state) leader-commit)
     raft-state                                              ;; no change
-    (let [{:keys [commit snapshot-index config snapshot-pending]} raft-state
+    (let [{:keys [index commit snapshot-index config snapshot-pending]} raft-state
           {:keys [state-machine snapshot-threshold snapshot-write]} config
           commit-entries    (raft-log/read-entry-range (:log-file raft-state) (inc commit) leader-commit)
           command-callbacks (:command-callbacks raft-state)
@@ -159,7 +159,7 @@
           (log/debug (format "Raft snapshot triggered at term %s, commit %s. Last snapshot: %s. Snapshot-threshold: %s."
                              term-at-commit commit snapshot-index snapshot-threshold))
           (snapshot-write commit snapshot-callback)))
-      (assoc raft-state :commit leader-commit
+      (assoc raft-state :commit (min index leader-commit)   ;; never have a commit farther than our latest index
                         :snapshot-pending snapshot-pending
                         :command-callbacks (reduce
                                              (fn [callbacks entry-map]
@@ -185,7 +185,7 @@
     (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit instant]} args
           proposed-term          (:term args)
           proposed-new-index     (+ prev-log-index (count entries))
-          {:keys [term index snapshot-index leader]} raft-state
+          {:keys [term index latest-index snapshot-index leader]} raft-state
           term-at-prev-log-index (cond
                                    (= 0 prev-log-index) 0
 
@@ -218,7 +218,7 @@
                                                ;; it is possible we have log entries after the leader's latest, remove them
                                                (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
                                              (-> %
-                                                 (assoc :latest-index proposed-new-index)
+                                                 (assoc :latest-index proposed-new-index) ;; always reset latest-index with new leader
                                                  (become-follower proposed-term leader-id cause))))
 
                                          ;; we have a log match at prev-log-index
@@ -241,7 +241,7 @@
                                              (raft-log/assoc-index->term-cache proposed-new-index (:term (last entries)))
 
                                              (assoc % :index proposed-new-index
-                                                      :latest-index proposed-new-index)))
+                                                      :latest-index (max proposed-new-index latest-index))))
 
 
                                          ;; we have an entry at prev-log-index, but doesn't match term, remove offending entries
@@ -249,7 +249,7 @@
                                          (#(do
                                              (raft-log/remove-entries (:log-file %) prev-log-index)
                                              (assoc % :index (dec prev-log-index)
-                                                      :latest-index proposed-new-index)))
+                                                      :latest-index (max proposed-new-index latest-index))))
 
                                          ;; Check if commit is newer and process into state machine if needed
                                          logs-match?

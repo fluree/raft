@@ -336,7 +336,7 @@
                 log-directory           "raftlog/"
                 event-chan              (async/chan)
                 command-chan            (async/chan)
-                entries-max             25                  ;; maximum number of entries we will send at once to any server
+                entries-max             50                  ;; maximum number of entries we will send at once to any server
                 }} config
         _          (assert (fn? state-machine))
         _          (assert (fn? snapshot-write))

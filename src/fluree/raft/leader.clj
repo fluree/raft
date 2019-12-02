@@ -99,7 +99,7 @@
       ;; standard case
       :else
       (let [{:keys [event-chan entries-max]} config
-            end-index      (min index (+ next-index entries-max)) ;; send at most entries-max
+            end-index      (min index (dec (+ next-index entries-max))) ;; send at most entries-max
             prev-log-index (max (dec next-index) 0)
             prev-log-term  (cond
                              (= 0 prev-log-index)
