@@ -1,4 +1,4 @@
-(defproject fluree/raft "0.10.3"
+(defproject fluree/raft "0.11.0"
 
   :description "Raft library in Clojure used by Fluree."
 
