@@ -75,7 +75,8 @@
               entry-type (if (pos? index) :append-entry (get entry-types' index))
               entry-data (try (nippy/thaw ba)
                               (catch Exception e (throw (ex-info
-                                                          "Raft log file appears to be corrupt. Delete raft logs for this server and re-start, assuming you have an existing raft quorum. It will re-sync from other servers."
+                                                          "Raft log file appears to be corrupt. If you have an existing Raft quorom, (for example, you have 3 servers running and 2 have non-corrupted Raft files), delete raft logs for this server and re-start. It will re-sync from other servers. If you do not have an existing quorom, email support@flur.ee"
+
                                                           {:file            (.getPath file)
                                                            :entry-number    (inc (count log))
                                                            :entry-type-code index
