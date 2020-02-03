@@ -264,26 +264,32 @@
 (defn- return-log-id
   "Takes java file and returns log id (typically same as start index)
   from the file name as a long integer."
-  [^File file]
-  (when-let [match (re-find #"^([0-9]+)\.raft$" (.getName file))]
-    (Long/parseLong (second match))))
+  ([^File file]
+    (return-log-id file "raft"))
+  ([^File file type]
+   (when-let [match (re-find (re-pattern (str "^([0-9]+)\\." type "$")) (.getName file))]
+     (Long/parseLong (second match)))))
 
 
 (defn all-log-indexes
   "Returns all index file names present in provided raft log path."
-  [path]
-  (->> (file-seq (clojure.java.io/file path))
-       (filter #(.isFile ^File %))
-       (keep return-log-id)))
+  ([path]
+    (all-log-indexes path "raft"))
+  ([path type]
+   (->> (file-seq (clojure.java.io/file path))
+        (filter #(.isFile ^File %))
+        (keep #(return-log-id % type)))))
 
 
 (defn latest-log-index
   "Returns the most recent (largest) log index point."
-  [path]
-  (let [all-idx-logs (all-log-indexes path)]
-    (if (empty? all-idx-logs)
-      0
-      (apply max all-idx-logs))))
+  ([path]
+    (latest-log-index path "raft"))
+  ([path type]
+   (let [all-idx-logs (all-log-indexes path type)]
+     (if (empty? all-idx-logs)
+       nil
+       (apply max all-idx-logs)))))
 
 
 (defn rotate-log
@@ -293,7 +299,7 @@
   (let [{:keys [config snapshot-index snapshot-term voted-for term index log-file]} raft-state
         {:keys [log-directory log-history]} config
         entries-post-snapshot (read-entry-range log-file (inc snapshot-index))
-        all-logs              (all-log-indexes log-directory)
+        all-logs              (all-log-indexes log-directory "raft")
         max-log-n             (when (not-empty all-logs) (apply max all-logs))
         next-log-n            (if max-log-n
                                 (max snapshot-index (inc max-log-n))
