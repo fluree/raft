@@ -49,7 +49,7 @@
 
   This means all state changes are single-threaded.
 
-  Maintains appropriate timeouts (hearbeat if leader, or election timeout if not leader)
+  Maintains appropriate timeouts (heartbeat if leader, or election timeout if not leader)
   to trigger appropriate actions when no activity happens between timeouts.
 
 
@@ -274,7 +274,7 @@
   [raft-state]
   (try
     (let [{:keys [log-directory snapshot-reify]} (:config raft-state)
-          latest-log       (raft-log/latest-log-index log-directory)
+          latest-log       (or (raft-log/latest-log-index log-directory) 0)
           latest-log-file  (io/file log-directory (str latest-log ".raft"))
           log-entries      (try (raft-log/read-log-file latest-log-file)
                                 (catch java.io.FileNotFoundException _ nil))
@@ -320,6 +320,29 @@
 
 
 (defn start
+  "Config map consists of the following keys:
+
+  - this-server         string|keyword     For example, myserver1. No default.
+  - servers             [string|keyword]   For example, [myserver1, myserver2]. No default.
+  - timeout-ms          int                Election timeout, good range is 10ms->500ms. By default, 500.
+  - heartbeat-ms        int                By default, 100.
+  - log-history         int                Number of historical log files to retain. By default 10.
+  - snapshot-threshold  int                Number of log entries since last snapshot (minimum) to generate new snapshot. By default, 100.
+  - log-directory       string             Directory where raft logs are stored. By default, \"raftlog/\"
+  - state-machine       fn                 See kv_example for sample.
+  - snapshot-write      fn                 See kv_example for sample.
+  - snapshot-xfer       fn                 See kv_example for sample.
+  - snapshot-install    fn                 See kv_example for sample.
+  - snapshot-reify      fn                 See kv_example for sample.
+  - send-rpc-fn         fn                 See kv_example for sample.
+  - default-command-timeout int            By default, 4000.
+  - close-fn            fn                 See kv_example for sample.
+  - event-chan          async/chan
+  - command-chan        async/chan
+  - entries-max         int                Maximum number of entries we will send at once to any server. By default, 50.
+  - entry-cache-size
+
+  "
   [config]
   (let [{:keys [this-server servers timeout-ms heartbeat-ms
                 log-history snapshot-threshold log-directory state-machine
