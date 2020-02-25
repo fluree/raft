@@ -99,10 +99,44 @@
                       (leader/queue-append-entries raft-state)
                       (leader/request-votes raft-state))
 
+                    ;; TODO - Connect. For now, this is not used
+                    :initialize-config
+                    (events/initialize-config raft-state data)
+
                     ;; returns current raft state to provided callback
                     :raft-state
                     (do (events/safe-callback callback raft-state)
                         raft-state)
+
+                    ;; Leader initiates add-server process
+                    :add-server
+                    (if (leader/is-leader? raft-state)
+                      (leader/queue-config-change raft-state data callback :add)
+                      (do (events/safe-callback callback (ex-info "Server is not currently leader."
+                                                                {:operation :new-command
+                                                                 :error     :raft/not-leader})) raft-state))
+
+                    ;; Leader initiates remove-server process. In removing a server, can immediately send config-change.
+                    :remove-server
+                    (if (leader/is-leader? raft-state)
+                      (leader/queue-config-change raft-state data callback :remove)
+                      (do (events/safe-callback callback (ex-info "Server is not currently leader."
+                                                                  {:operation :new-command
+                                                                   :error     :raft/not-leader})) raft-state))
+
+                    ;; Respond to leader request for change-config (both add and remove server)
+                    :config-change
+                    (events/config-change raft-state data callback)
+
+                    :config-change-response
+                    (leader/config-change-response-event raft-state data)
+
+                    ;; Commit config change once leader sends this command
+                    :config-change-commit
+                    (events/apply-config-change raft-state data events/server-state-baseline callback)
+
+                    :config-change-commit-response
+                    (leader/config-change-commit-response-event raft-state data)
 
                     ;; process and respond to append-entries event from leader
                     :append-entries
@@ -165,7 +199,7 @@
                     (let [[snapshot-index snapshot-term] data]
                       (log/debug (format "Snapshot complete at index %s, term %s. Raft state last snapshot at %s."
                                          snapshot-index snapshot-term (:snapshot-index raft-state)))
-                      (if (<= snapshot-index (:snapshot-index raft-state))
+                      (if (<= snapshot-index (or (:snapshot-index raft-state) 0))
                         ;; in case callback triggered multiple times, ignore
                         raft-state
                         (-> raft-state
@@ -348,6 +382,7 @@
                 log-history snapshot-threshold log-directory state-machine
                 snapshot-write snapshot-xfer snapshot-install snapshot-reify
                 send-rpc-fn default-command-timeout close-fn
+                catch-up-rounds
                 leader-change-fn                            ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
                 event-chan command-chan
                 entries-max entry-cache-size]
@@ -356,6 +391,7 @@
                 log-history             10                  ;; number of historical log files to retain
                 snapshot-threshold      100                 ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 default-command-timeout 4000
+                catch-up-rounds         10
                 log-directory           "raftlog/"
                 event-chan              (async/chan)
                 command-chan            (async/chan)
@@ -385,7 +421,7 @@
                                  :default-command-timeout default-command-timeout
                                  :entries-max entries-max
                                  :entry-cache-size (or entry-cache-size entries-max) ;; we keep a local cache of last n entries, by default size of entries-max. Performance boost as most recent entry access does not require io
-                                 )
+                                 :catch-up-rounds catch-up-rounds)
         _          (log/debug "Raft starting with config: " (pr-str config*))
         raft-state (-> {:id               (rand-int 100000) ;; opaque id, in case multiple raft processes are going
                         :watch-fns        (atom (if leader-change-fn
@@ -399,7 +435,7 @@
                         :log-file         (io/file log-directory "0.raft")
                         :term             0                 ;; latest term
                         :index            0                 ;; latest index
-                        :snapshot-index   0                 ;; index point of last snapshot
+                        :snapshot-index   nil               ;; index point of last snapshot
                         :snapshot-term    0                 ;; term of last snapshot
                         :snapshot-pending nil               ;; holds pending commit if snapshot was requested
                         :commit           0                 ;; commit point in index
