@@ -1,7 +1,6 @@
 /logs
 /fdbdata
 /tmp
-/.idea
 /target
 /build
 /classes
@@ -13,6 +12,6 @@ pom.xml.asc
 /.nrepl-port
 .hgignore
 .hg/
-*.iml
 .DS_Store
 /raftlog
+/.cpcache/*
