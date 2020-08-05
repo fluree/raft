@@ -4,8 +4,6 @@
 /target
 /build
 /classes
-pom.xml
-pom.xml.asc
 *.jar
 *.class
 /.lein-*
