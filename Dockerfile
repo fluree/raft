@@ -1,4 +1,4 @@
-FROM clojure:tools-deps-1.10.1.547-slim-buster
+FROM clojure:tools-deps-1.10.1.619-slim-buster
 
 RUN mkdir -p /usr/src/fluree.raft
 WORKDIR /usr/src/fluree.raft
@@ -7,11 +7,13 @@ WORKDIR /usr/src/fluree.raft
 RUN apt-get update && apt-get install -y wget curl gnupg2 software-properties-common
 
 # Install & cache project deps
-COPY deps.edn ./
-RUN clojure -A:test -Stree
+COPY deps.edn Makefile ./
+RUN make deps
 
 # Copy in the rest of the code
 COPY . ./
+
+RUN make jar
 
 # Create a user to own the fluree code
 RUN groupadd fluree && useradd --no-log-init -g fluree -m fluree
