@@ -1,0 +1,25 @@
+{:deps {org.clojure/clojure {:mvn/version "1.10.1"}
+        org.clojure/core.async {:mvn/version "1.2.603"}
+        org.clojure/tools.logging {:mvn/version "1.1.0"}
+        com.taoensso/nippy {:mvn/version "2.14.0"}}
+ :aliases
+ {:test
+  {:extra-paths ["test"]
+   :extra-deps {com.cognitect/test-runner
+                {:git/url "https://github.com/cognitect-labs/test-runner.git"
+                 :sha "f7ef16dc3b8332b0d77bc0274578ad5270fbfedd"}}
+   :main-opts ["-m" "cognitect.test-runner"]}
+
+  :jar
+  {:extra-deps {seancorfield/depstar {:mvn/version "RELEASE"}}
+   :main-opts ["-m" "hf.depstar.jar" "target/fluree-raft.jar"]}
+
+  :install
+  {:extra-deps {deps-deploy/deps-deploy {:mvn/version "RELEASE"}}
+   :main-opts ["-m" "deps-deploy.deps-deploy" "install"
+               "target/fluree-raft.jar"]}
+
+  :deploy
+  {:extra-deps {deps-deploy/deps-deploy {:mvn/version "RELEASE"}}
+   :main-opts ["-m" "deps-deploy.deps-deploy" "deploy"
+               "target/fluree-raft.jar"]}}}
