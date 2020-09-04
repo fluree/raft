@@ -383,20 +383,19 @@
                 snapshot-write snapshot-xfer snapshot-install snapshot-reify
                 send-rpc-fn default-command-timeout close-fn
                 catch-up-rounds
-                leader-change-fn                            ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
+                leader-change-fn                       ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
                 event-chan command-chan
                 entries-max entry-cache-size]
-         :or   {timeout-ms              500                 ;; election timeout, good range is 10ms->500ms
-                heartbeat-ms            100                 ;; heartbeat time in milliseconds
-                log-history             10                  ;; number of historical log files to retain
-                snapshot-threshold      100                 ;; number of log entries since last snapshot (minimum) to generate new snapshot
+         :or   {timeout-ms              500            ;; election timeout, good range is 10ms->500ms
+                heartbeat-ms            100            ;; heartbeat time in milliseconds
+                log-history             10             ;; number of historical log files to retain
+                snapshot-threshold      100            ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 default-command-timeout 4000
                 catch-up-rounds         10
                 log-directory           "raftlog/"
                 event-chan              (async/chan)
                 command-chan            (async/chan)
-                entries-max             50                  ;; maximum number of entries we will send at once to any server
-                }} config
+                entries-max             50}} config    ;; maximum number of entries we will send at once to any server
         _          (assert (fn? state-machine))
         _          (assert (fn? snapshot-write))
         _          (assert (fn? snapshot-reify))
@@ -444,8 +443,8 @@
 
                         ;; map of servers participating in consensus. server id is key, state of server is val
                         :servers          (reduce #(assoc %1 %2 events/server-state-baseline) {} servers) ;; will be set up by leader/reset-server-state
-                        :msg-queue        nil               ;; holds outgoing messages
-                        }
+                        :msg-queue        nil}               ;; holds outgoing messages
+
                        (initialize-raft-state))]
     (log/debug "Raft initialized state: " (pr-str raft-state))
     (event-loop raft-state)

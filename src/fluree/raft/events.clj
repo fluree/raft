@@ -260,8 +260,8 @@
                                    (<= prev-log-index index)
                                    (raft-log/index->term (:log-file raft-state) prev-log-index)
 
-                                   (< index prev-log-index) nil ;; we don't even have this index
-                                   )
+                                   (< index prev-log-index) nil) ;; we don't even have this index
+
           new-leader?            (or (> proposed-term term) (not= leader-id leader))
           logs-match?            (= prev-log-term term-at-prev-log-index)
           new-timeout-ms         (new-election-timeout raft-state)
@@ -387,8 +387,8 @@
                                                  (format "For index %s, provided log term of %s is less than our log term of %s." last-log-index last-log-term my-last-log-term)
 
                                                  have-newer-index?
-                                                 (format "For index %s the terms are the same: %s, but our index is longer: %s." last-log-index last-log-term index)
-                                                 )}
+                                                 (format "For index %s the terms are the same: %s, but our index is longer: %s." last-log-index last-log-term index))}
+
                             {:term proposed-term :vote-granted true})
         raft-state*       (cond
                             ;; we gave our vote, register

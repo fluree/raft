@@ -9,8 +9,8 @@
 (def ^:const entry-types {:current-term -1                  ;; record of latest term we've seen
                           :voted-for    -2                  ;; record of votes
                           :snapshot     -3                  ;; record of new snapshots
-                          :no-op        -4                  ;; used to clear out entries that are found to be incorrect
-                          })
+                          :no-op        -4})                  ;; used to clear out entries that are found to be incorrect
+
 
 ;; reverse map of above
 (def ^:const entry-types' (into {} (map (fn [[k v]] [v k]) entry-types)))
@@ -265,7 +265,7 @@
   "Takes java file and returns log id (typically same as start index)
   from the file name as a long integer."
   ([^File file]
-    (return-log-id file "raft"))
+   (return-log-id file "raft"))
   ([^File file type]
    (when-let [match (re-find (re-pattern (str "^([0-9]+)\\." type "$")) (.getName file))]
      (Long/parseLong (second match)))))
@@ -274,7 +274,7 @@
 (defn all-log-indexes
   "Returns all index file names present in provided raft log path."
   ([path]
-    (all-log-indexes path "raft"))
+   (all-log-indexes path "raft"))
   ([path type]
    (->> (file-seq (clojure.java.io/file path))
         (filter #(.isFile ^File %))
@@ -284,7 +284,7 @@
 (defn latest-log-index
   "Returns the most recent (largest) log index point."
   ([path]
-    (latest-log-index path "raft"))
+   (latest-log-index path "raft"))
   ([path type]
    (let [all-idx-logs (all-log-indexes path type)]
      (if (empty? all-idx-logs)

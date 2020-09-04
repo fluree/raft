@@ -60,10 +60,11 @@
 (defn- queue-install-snapshot
   ([raft-state server]
    (queue-install-snapshot raft-state server false))
-  ([raft-state server pending?] (let [{:keys [snapshot-index snapshot-term]} raft-state]
-                         (queue-install-snapshot raft-state server snapshot-index snapshot-term 1 pending?)))
+  ([raft-state server pending?]
+   (let [{:keys [snapshot-index snapshot-term]} raft-state]
+     (queue-install-snapshot raft-state server snapshot-index snapshot-term 1 pending?)))
   ([raft-state server snapshot-index snapshot-term snapshot-part]
-    (queue-install-snapshot raft-state server snapshot-index snapshot-term snapshot-part false))
+   (queue-install-snapshot raft-state server snapshot-index snapshot-term snapshot-part false))
   ([raft-state server snapshot-index snapshot-term snapshot-part pending?]
    (let [{:keys [term this-server config]} raft-state
          {:keys [snapshot-xfer event-chan]} config
@@ -87,7 +88,6 @@
              (not pending?) (update-in [:servers server] #(assoc % :snapshot-index snapshot-index))))))
 
 
-
 (defn queue-add-server
   [raft-state server]
   (let [{:keys [index other-servers config term pending-server this-server]} raft-state
@@ -104,19 +104,19 @@
           (> (inc next-index) index)
           (let [req {:server server
                      :command-id    (:command-id pending-server)
-                   :op             :add
-                   :term           term
-                   :leader-id      this-server
-                   :instant        (System/currentTimeMillis)}]
-        (reduce (fn [rs recipient-server]
-                  (let [callback (fn [response]
-                                   (async/put! event-chan
-                                               [:config-change-response
-                                                {:server   recipient-server
-                                                 :request  req
-                                                 :response response}]))]
-                    (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
-                rs* other-servers))
+                     :op             :add
+                     :term           term
+                     :leader-id      this-server
+                     :instant        (System/currentTimeMillis)}]
+            (reduce (fn [rs recipient-server]
+                      (let [callback (fn [response]
+                                       (async/put! event-chan
+                                                   [:config-change-response
+                                                    {:server   recipient-server
+                                                     :request  req
+                                                     :response response}]))]
+                        (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
+                    rs* other-servers))
 
           :else
         ;; Else remove server from raft-state and shut-down
@@ -137,7 +137,7 @@
 ;; TODO - rename :snapshot-index in server state to something like :sending-snapshot, so different name than what is in raft-state
 (defn- queue-append-entry
   ([raft-state server]
-    (queue-append-entry raft-state server false))
+   (queue-append-entry raft-state server false))
   ([raft-state server pending?]
    (let [{:keys [term index commit this-server snapshot-index config]} raft-state
          server-state   (if pending?
@@ -190,9 +190,9 @@
          (cond-> raft-state*
                  true (assoc-in [:msg-queue server] message)
                  pending?       (assoc-in [:pending-server :next-index] (inc end-index))
-                 (not pending?) (assoc-in [:servers server :next-index] (inc end-index))
+                 (not pending?) (assoc-in [:servers server :next-index] (inc end-index))))))))
              ;; update next-index, we will send out parallel updates as needed
-            ))))))
+
 
 
 (defn install-snapshot-response-event
@@ -226,12 +226,14 @@
 
       done?
       (cond-> raft-state*
-              pending?       (update-in [:pending-server] #(assoc % :next-index (inc snapshot-index)
-                                                                    :match-index snapshot-index
-                                                                    :snapshot-index nil))
-              (not pending?) (update-in [:servers server] #(assoc % :next-index (inc snapshot-index)
-                                                 :match-index snapshot-index
-                                                 :snapshot-index nil))
+              pending?       (update-in [:pending-server]
+                                        #(assoc % :next-index (inc snapshot-index)
+                                                  :match-index snapshot-index
+                                                  :snapshot-index nil))
+              (not pending?) (update-in [:servers server]
+                                        #(assoc % :next-index (inc snapshot-index)
+                                                  :match-index snapshot-index
+                                                  :snapshot-index nil))
               true (update-commit)
               true (queue-append-entry server pending?))
 
@@ -273,7 +275,7 @@
                       :timeout-ms heartbeat-time
                       :timeout-at (+ heartbeat-time (System/currentTimeMillis))))))
 
-  (defn append-entries-response-event
+(defn append-entries-response-event
   "Updates raft state with an append-entries response. Responses may come out of order.
 
   A few of the things that can happen:
@@ -334,10 +336,10 @@
                                       (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
 
                 (not pending?) (update-in [:servers server]
-                           (fn [server-state]
-                             ;; in the case we got an out-of-order response, next-index might already be set lower than
-                             ;; prev-log-index for this request, take the minimum
-                             (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
+                                          (fn [server-state]
+                                            ;; in the case we got an out-of-order response, next-index might already be set lower than
+                                            ;; prev-log-index for this request, take the minimum
+                                            (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
 
                 (not old-response?) (queue-append-entry server pending?))))))
 

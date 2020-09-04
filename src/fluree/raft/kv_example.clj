@@ -369,6 +369,5 @@
   (delete "testkey")
 
   ;; shut down a server
-  (close system 4)
+  (close system 4))
 
-  )
