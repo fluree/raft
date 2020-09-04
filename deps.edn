@@ -22,4 +22,10 @@
   :deploy
   {:extra-deps {deps-deploy/deps-deploy {:mvn/version "RELEASE"}}
    :main-opts ["-m" "deps-deploy.deps-deploy" "deploy"
-               "target/fluree-raft.jar"]}}}
+               "target/fluree-raft.jar"]}
+
+  :jepsen
+  {:extra-paths ["dist-test"]
+   :extra-deps {javax.xml.bind/jaxb-api {:mvn/version "2.3.0"}
+                jepsen/jepsen {:mvn/version "0.1.13"}}
+   :main-opts ["--main" "fluree.raft.dist-test" "test"]}}}
