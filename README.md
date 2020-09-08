@@ -11,7 +11,7 @@ state machine implementation, and other configurations.
 
 ## License
 
-Copyright © 2018 Fluree PBC
+Copyright © 2018-2020 Fluree PBC
 
 Distributed under the Eclipse Public License either version 1.0 or (at
 your option) any later version.
