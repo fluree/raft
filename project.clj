@@ -1,10 +1,10 @@
-(defproject fluree/raft "0.11.2"
+(defproject com.fluree/raft "0.11.3-SNAPSHOT"
 
   :description "Raft library in Clojure used by Fluree."
 
   :author "Brian Platz"
 
-  :url "https://github.com/fluree/fluree"
+  :url "https://github.com/fluree/raft"
 
   :license {:name "Eclipse Public License"
             :url  "http://www.eclipse.org/legal/epl-v10.html"}
