@@ -18,7 +18,7 @@
 
 (defn- write-entry
   "Writes entry to specified log"
-  ([^File file index term entry] (write-entry file index term entry false))
+  ([^File file index term entry] (write-entry file index term entry true))
   ([^File file index term entry retry?]
    (try
      (let [^bytes data (nippy/freeze entry)
@@ -33,12 +33,12 @@
          (.close)))
      (catch FileNotFoundException _
        (if retry?
-         (do (log/error "Unable to create raft log file. Does the process have permission to file: " (pr-str file) "?")
-             (log/error "Fatal Error, exiting.")
-             (System/exit 1))
          (do
            (io/make-parents file)
-           (write-entry file index term entry true))))
+           (write-entry file index term entry false))
+         (do (log/error "Unable to create raft log file. Does the process have permission to file: " (pr-str file) "?")
+             (log/error "Fatal Error, exiting.")
+             (System/exit 1))))
      (catch Exception e
        (log/error e "Unexpected Error attempting to write entry to raft log:" (pr-str file))
        (log/error e "Fatal Error, exiting.")
