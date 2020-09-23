@@ -9,7 +9,7 @@
 (def ^:const entry-types {:current-term -1                  ;; record of latest term we've seen
                           :voted-for    -2                  ;; record of votes
                           :snapshot     -3                  ;; record of new snapshots
-                          :no-op        -4})                  ;; used to clear out entries that are found to be incorrect
+                          :no-op        -4})                ;; used to clear out entries that are found to be incorrect
 
 
 ;; reverse map of above
@@ -18,21 +18,31 @@
 
 (defn- write-entry
   "Writes entry to specified log"
-  [^File file index term entry]
-  (try
-    (let [^bytes data (nippy/freeze entry)
-          len         (count data)
-          raf         (RandomAccessFile. file "rw")]
-      (doto raf
-        (.seek (.length raf))
-        (.writeInt len)
-        (.writeLong index)
-        (.writeLong term)
-        (.write data)
-        (.close)))
-    (catch FileNotFoundException _
-      (io/make-parents file)
-      (write-entry file index term entry))))
+  ([^File file index term entry] (write-entry file index term entry true))
+  ([^File file index term entry retry?]
+   (try
+     (let [^bytes data (nippy/freeze entry)
+           len         (count data)
+           raf         (RandomAccessFile. file "rw")]
+       (doto raf
+         (.seek (.length raf))
+         (.writeInt len)
+         (.writeLong index)
+         (.writeLong term)
+         (.write data)
+         (.close)))
+     (catch FileNotFoundException _
+       (if retry?
+         (do
+           (io/make-parents file)
+           (write-entry file index term entry false))
+         (do (log/error "Unable to create raft log file. Does the process have permission to file: " (pr-str file) "?")
+             (log/error "Fatal Error, exiting.")
+             (System/exit 1))))
+     (catch Exception e
+       (log/error e "Unexpected Error attempting to write entry to raft log:" (pr-str file))
+       (log/error e "Fatal Error, exiting.")
+       (System/exit 1)))))
 
 
 (defn write-current-term
