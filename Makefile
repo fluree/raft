@@ -1,6 +1,8 @@
 .PHONY: test deps jar install deploy clean
 
-target/fluree-ledger.jar: pom.xml deps.edn src/**/*
+SOURCES := $(shell find src)
+
+target/fluree-raft.jar: pom.xml deps.edn $(SOURCES)
 	clojure -A:jar
 
 deps:
@@ -12,14 +14,14 @@ pom.xml: deps.edn
 test:
 	clojure -A:test
 
-jar: target/fluree-ledger.jar
+jar: target/fluree-raft.jar
 
-install: target/fluree-ledger.jar
+install: target/fluree-raft.jar
 	clojure -A:install
 
 # You'll need to set the env vars CLOJARS_USERNAME & CLOJARS_PASSWORD
 # (which must be a Clojars deploy token now) to use this.
-deploy: target/fluree-ledger.jar
+deploy: target/fluree-raft.jar
 	clojure -A:deploy
 
 clean:
