@@ -33,8 +33,8 @@
          (.close)))
      (catch FileNotFoundException _
        (if retry?
-         (do (log/error "Unable to create raft log file. Does the process have permission to create: " (pr-str file))
-             (log/error "Fata Error, exiting")
+         (do (log/error "Unable to create raft log file. Does the process have permission to file: " (pr-str file) "?")
+             (log/error "Fatal Error, exiting.")
              (System/exit 1))
          (do
            (io/make-parents file)
