@@ -4,7 +4,7 @@
   <packaging>jar</packaging>
   <groupId>com.fluree</groupId>
   <artifactId>raft</artifactId>
-  <version>0.12.0-SNAPSHOT</version>
+  <version>0.12.0</version>
   <name>raft</name>
   <dependencies>
     <dependency>
