@@ -275,6 +275,7 @@
                       :timeout-ms heartbeat-time
                       :timeout-at (+ heartbeat-time (System/currentTimeMillis))))))
 
+
 (defn append-entries-response-event
   "Updates raft state with an append-entries response. Responses may come out of order.
 
@@ -501,6 +502,7 @@
                  (assoc-in rs [:msg-queue recipient-server] [:config-change-commit req callback])))
             raft-state (conj other-servers server))))
 
+
 (defn config-change-response-event
   [raft-state {:keys [server request response]}]
   (log/debug "Config change response from server " server {:response response :request request})
@@ -530,6 +532,7 @@
                  (events/apply-config-change request server-state)
                 (queue-apply-config-change request)))
           raft-state*)))))
+
 
 (defn close-leader
   [raft-state]
@@ -572,6 +575,7 @@
                             (not= server this-server)) (assoc-in [:msg-queue server] [:close :removed-server nil]))
               raft-state*))
           raft-state*)))))
+
 
 (defn queue-config-change
   [{:keys [this-server other-servers] :as raft-state} data callback op]
@@ -648,6 +652,7 @@
                                                          :response response}]))]
                             (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
                         raft-state other-servers))))))
+
 
 (defn new-command-event
   "Processes new commands. Only happens if currently a raft leader."
