@@ -3,7 +3,7 @@
 SOURCES := $(shell find src)
 
 target/fluree-raft.jar: pom.xml deps.edn $(SOURCES)
-	clojure -M:jar
+	clojure -X:jar
 
 deps:
 	clojure -M:test -P
