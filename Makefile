@@ -12,7 +12,7 @@ pom.xml: deps.edn
 	clojure -Spom
 
 test:
-	clojure -M:test
+	clojure -M:test:runner
 
 jar: target/fluree-raft.jar
 
