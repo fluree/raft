@@ -199,9 +199,15 @@
         log-directory      (str "raftlog/" (name server-id) "/")
         snapshot-dir       (str log-directory "snapshots/")
         raft               (raft/start {:this-server           server-id
-                                        :leader-change-fn      (fn [x] (log/info
-                                                                         (str server-id " reports leader change to: "
-                                                                              (:leader x) " term: " (:term x))))
+                                        :leader-change-fn      (fn [{:keys [event cause message old-leader
+                                                                            new-leader new-raft-state]}]
+                                                                 (log/info
+                                                                   (format "%s reports leader change from %s to %s "
+                                                                           "term: %s event: %s cause: %s"
+                                                                           "message: %s"
+                                                                           server-id old-leader new-leader
+                                                                           (:term new-raft-state)
+                                                                           event cause message)))
                                         :servers               servers
                                         :timeout-ms            1500
                                         :heartbeat-ms          500
