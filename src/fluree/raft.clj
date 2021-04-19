@@ -66,6 +66,14 @@
       :closed)))
 
 
+(defn add-server
+  [raft new-server]
+  (let [event-chan (event-chan raft)
+        ch (async/promise-chan)]
+    (async/put! event-chan [:add-server new-server #(async/put! ch %)])
+    ch))
+
+
 (defn event-loop
   "Launches an event loop where all state changes to the raft state happen.
 

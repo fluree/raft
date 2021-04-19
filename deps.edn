@@ -13,6 +13,11 @@
                  :sha     "b6b3193fcc42659d7e46ecd1884a228993441182"}} 
    :main-opts  ["-m" "cognitect.test-runner"]}
 
+  :kv-example
+  {:extra-paths ["resources"]
+   :extra-deps  {ch.qos.logback/logback-classic {:mvn/version "1.2.3"}}
+   :exec-fn     fluree.raft.kv-example/run
+   :exec-args   {:instances 3}}
 
   :jar
   {:extra-deps {com.github.seancorfield/depstar {:mvn/version "2.0.216"}}
