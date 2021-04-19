@@ -6,8 +6,7 @@
             [clojure.tools.logging :as log]
             [fluree.raft.log :as raft-log])
   (:refer-clojure :exclude [read])
-  (:import (java.util UUID)
-           (java.io File)))
+  (:import (java.util UUID)))
 
 
 (defn snapshot-xfer
@@ -129,7 +128,7 @@
 
 
 ;; will hold state of our started raft instances
-(def system nil)
+(def system (atom nil))
 
 
 (defn send-rpc
@@ -137,7 +136,7 @@
   Includes a resp-chan that will eventually contain a response."
   [raft server operation data callback]
   ;; if system was shut down, there will not be a server-chan... no-op on send-rpc call
-  (when-let [server-chan (get-in system [server :rpc-chan])]
+  (when-let [server-chan (get-in @system [server :rpc-chan])]
     (let [resp-chan   (async/promise-chan)
           this-server (:this-server raft)
           msg-id      (str (UUID/randomUUID))
@@ -189,7 +188,7 @@
   [rpc-chan this-server]
   (fn []
     (async/close! rpc-chan)
-    (alter-var-root #'system (fn [sys] (dissoc sys this-server)))
+    (swap! system (fn [sys] (dissoc sys this-server)))
     ::closed))
 
 
@@ -229,7 +228,7 @@
   (let [servers (mapv (comp keyword str) (range 1 (inc instances)))
         sys     (reduce (fn [acc server] (assoc acc server (start-instance servers server)))
                         {} servers)]
-    (alter-var-root #'system (constantly sys))
+    (reset! system sys)
     :started))
 
 
@@ -238,7 +237,7 @@
   ([server] (view-raft-state server (fn [x] (clojure.pprint/pprint (dissoc x :config)))))
   ([server callback]
    (let [server     (if (keyword? server) server (keyword (str server)))
-         raft       (get-in system [server :raft])
+         raft       (get-in @system [server :raft])
          event-chan (raft/event-chan raft)]
      (async/put! event-chan [:raft-state nil callback]))))
 
@@ -250,7 +249,7 @@
 
 (defn get-leader
   "Returns leader according to specified server."
-  ([] (get-leader (random-server system)))
+  ([] (get-leader (random-server @system)))
   ([server]
    (let [promise-chan (async/promise-chan)
          callback     (fn [resp] (if-let [leader (:leader resp)]
@@ -263,7 +262,7 @@
 (defn rpc-async
   "Performs  rpc call to specified server, returns core async channel."
   [server entry]
-  (let [raft         (get-in system [server :raft])
+  (let [raft         (get-in @system [server :raft])
         promise-chan (async/promise-chan)
         callback     (fn [resp] (if (nil? resp)
                                   (async/close! promise-chan)
@@ -280,21 +279,21 @@
 
 (defn write
   "Writes value to specified key."
-  ([k v] (write (get-leader (random-server system)) k v))
+  ([k v] (write (get-leader (random-server @system)) k v))
   ([server k v]
    (rpc-sync server [:write k v])))
 
 
 (defn write-async
   "Writes value to specified key, returns core async chan with eventual response."
-  ([k v] (write (get-leader (random-server system)) k v))
+  ([k v] (write (get-leader (random-server @system)) k v))
   ([server k v]
    (rpc-async server [:write k v])))
 
 
 (defn read
   "Reads from leader after all pending commands are committed."
-  ([k] (read (get-leader (random-server system)) k))
+  ([k] (read (get-leader (random-server @system)) k))
   ([server k]
    (rpc-sync server [:read k])))
 
@@ -303,27 +302,27 @@
   "Dumps our full state machine state for given server"
   [server]
   (let [server     (if (keyword? server) server (keyword (str server)))
-        state-atom (get-in system [server :state-atom])]
+        state-atom (get-in @system [server :state-atom])]
     @state-atom))
 
 
 (defn read-local
   "Reads key from local state, doesn't sync across raft"
-  ([k] (read-local (rand-nth (keys system)) k))
+  ([k] (read-local (rand-nth (keys @system)) k))
   ([server k]
    (get (dump-state server) k)))
 
 
 (defn cas
   "Compare and swap"
-  ([k compare swap] (cas (get-leader (random-server system)) k compare swap))
+  ([k compare swap] (cas (get-leader (random-server @system)) k compare swap))
   ([server k compare swap]
    (rpc-sync server [:cas k compare swap])))
 
 
 (defn delete
   "Delete key"
-  ([k] (delete (get-leader (random-server system)) k))
+  ([k] (delete (get-leader (random-server @system)) k))
   ([server k]
    (rpc-sync server [:delete k])))
 
@@ -335,6 +334,57 @@
         raft   (get-in system [server :raft])]
     (raft/close raft)
     :closed))
+
+
+(defn next-server-id [system]
+  (->> system
+       keys
+       (map (comp #(Integer/parseInt ^String %) name))
+       (apply max)
+       inc
+       str
+       keyword))
+
+
+(defn get-servers [system]
+  (keys system))
+
+
+(defn add-server [system-ref]
+  (let [system @system-ref
+        next-id (next-server-id system)
+        servers (-> system keys vec)
+        new-server (start-instance servers next-id)
+        leader (get-leader)
+        raft (get-in system [leader :raft])]
+    (raft/add-server raft [:add-server-test next-id])
+    (swap! system-ref #(assoc % next-id new-server))))
+
+
+(defn run [{:keys [instances]}]
+  (println "Running" instances "node key-value example network")
+  (launch-raft-system instances)
+  (Thread/sleep 5000) ; give system time to init
+  ;; (println "system:" (pr-str @system))
+  (loop [i 0]
+    (println "index:" (read "index"))
+    (case i
+      5 (add-server system) ; add a server when index hits 5
+      10 (add-server system) ; add another server when index hits 10
+      nil)
+    (Thread/sleep 5000)
+    (view-raft-state 1)
+    (println "Leader:" (get-leader))
+    (println "Servers:" (get-servers @system))
+    (println)
+    (write "index" i)
+    (recur (inc i))))
+
+
+(defn -main [& args]
+  (if (empty? args)
+    (run {:instances 3})
+    (run {:instances (first args)})))
 
 
 (comment
@@ -349,7 +399,7 @@
   (get-leader 1)
 
   ;; same as above, but picks random server to inquire
-  (let [server (random-server system)]
+  (let [server (random-server @system)]
     (println "Using server:" server)
     (get-leader server))
 
@@ -373,7 +423,7 @@
   (dump-state 1)
 
   ;; same command, but random server
-  (let [server (random-server system)]
+  (let [server (random-server @system)]
     (println "Using server:" server)
     (read-local server "testkey"))
 
@@ -384,5 +434,5 @@
   (delete "testkey")
 
   ;; shut down a server
-  (close system 4))
+  (close @system 4))
 

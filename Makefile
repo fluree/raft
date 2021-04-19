@@ -1,4 +1,4 @@
-.PHONY: test deps jar install deploy clean
+.PHONY: test deps kv-example jar install deploy clean
 
 SOURCES := $(shell find src)
 
@@ -10,6 +10,9 @@ deps:
 
 pom.xml: deps.edn
 	clojure -Spom
+
+kv-example:
+	clojure -X:kv-example
 
 test:
 	clojure -M:test:runner

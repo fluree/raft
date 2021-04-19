@@ -6,7 +6,7 @@
  {:test
   {:extra-paths ["test"]
    :extra-deps  {com.cognitect/test-runner
-                 {:git/url "io.github/cognitect-labs/test-runner"
+                 {:git/url "io.github.cognitect-labs/test-runner"
                   :git/tag "v0.5.0"}}
    :main-opts   ["-m" "cognitect.test-runner"]}
 
@@ -18,11 +18,17 @@
   :runner
   {:extra-deps {com.cognitect/test-runner
                 {:git/url "https://github.com/cognitect-labs/test-runner.git"
-                 :sha     "b6b3193fcc42659d7e46ecd1884a228993441182"}} 
+                 :sha     "cc75980b43011773162b485f46f939dc5fba91e4"}}
    :main-opts  ["-m" "cognitect.test-runner"]}
 
+  :kv-example
+  {:extra-paths ["resources"]
+   :extra-deps  {ch.qos.logback/logback-classic {:mvn/version "1.2.3"}}
+   :exec-fn     fluree.raft.kv-example/run
+   :exec-args   {:instances 3}}
+
   :install
-  {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
+  {:extra-deps {slipset/deps-deploy {:mvn/version "0.1.5"}}
    :exec-fn    deps-deploy.deps-deploy/deploy
    :exec-args  {:installer :local
                 :artifact  "target/fluree-raft.jar"}}
