@@ -1,8 +1,10 @@
 (ns fluree.raft.events
   (:require [clojure.core.async :as async]
-            [fluree.raft.log :as raft-log]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
-            [fluree.raft.watch :as watch]))
+            [fluree.raft.log :as raft-log]
+            [fluree.raft.watch :as watch]
+            [fluree.raft.events-specs :as specs]))
 
 ;; general events/functions for all raft servers (not leader-specific)
 
@@ -177,7 +179,7 @@
    (let [{:keys [server command-id op]} req
          _ (log/info (str "Committing " server " " (subs (str op) 1)
                           " to the network configuration. Change command id: " command-id))
-         raft-state* (assoc raft-state :pending-server nil)]
+         raft-state* (dissoc raft-state :pending-server)]
      (do (safe-callback callback {:term (:term raft-state*) :success true})
          (condp = op
            :add (if (= (:this-server raft-state) server)

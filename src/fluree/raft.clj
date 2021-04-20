@@ -1,20 +1,25 @@
 (ns fluree.raft
   (:require [clojure.core.async :as async]
             [clojure.java.io :as io]
+            [clojure.spec.alpha :as s]
             [clojure.tools.logging :as log]
             [fluree.raft.log :as raft-log]
             [fluree.raft.leader :as leader]
             [fluree.raft.events :as events]
+            [fluree.raft-specs :as raft-specs]
             [fluree.raft.watch :as watch])
   (:import (java.util UUID)
            (java.io FileNotFoundException)))
 
+
 (defrecord RaftCommand [entry id timeout callback])
+
 
 (defn event-chan
   "Returns event channel for the raft instance."
   [raft]
   (events/event-chan raft))
+
 
 (defn logfile
   "Returns log file name for raft."
@@ -67,10 +72,17 @@
 
 
 (defn add-server
-  [raft new-server]
+  "Adds an already created server to the raft network. You can create the
+  server by calling `start` with the appropriate config, then pass its id to
+  this fn in the `new-server-id` arg. Due to the way the raft protocol works,
+  you can only add one server at a time."
+  [raft new-server-id]
+  (raft-specs/valid-or-throw ::raft-specs/raft raft "invalid raft state")
+  (raft-specs/valid-or-throw ::raft-specs/server-id new-server-id "invalid server id")
   (let [event-chan (event-chan raft)
-        ch (async/promise-chan)]
-    (async/put! event-chan [:add-server new-server #(async/put! ch %)])
+        ch         (async/promise-chan)
+        command-id (->> new-server-id name (str "add-server-") keyword)]
+    (async/put! event-chan [:add-server [command-id new-server-id] #(async/put! ch %)])
     ch))
 
 
@@ -459,31 +471,33 @@
                                  :entries-max entries-max
                                  :entry-cache-size (or entry-cache-size entries-max) ;; we keep a local cache of last n entries, by default size of entries-max. Performance boost as most recent entry access does not require io
                                  :catch-up-rounds catch-up-rounds)
+        _          (raft-specs/valid-or-throw ::raft-specs/config config* "invalid config")
+        raft-init  {:id               (rand-int 100000)   ;; opaque id, in case multiple raft processes are going
+                    :watch-fns        (atom (if leader-change-fn
+                                              {::default {:fn leader-change-fn :event-type nil}}
+                                              {}))
+                    :config           config*
+                    :this-server      this-server
+                    :other-servers    (into [] (filter #(not= this-server %) servers))
+                    :status           nil                 ;; candidate, leader, follower
+                    :leader           nil                 ;; current known leader
+                    :log-file         (io/file log-directory "0.raft")
+                    :term             0                   ;; latest term
+                    :index            0                   ;; latest index
+                    :snapshot-index   nil                 ;; index point of last snapshot
+                    :snapshot-term    0                   ;; term of last snapshot
+                    :snapshot-pending nil                 ;; holds pending commit if snapshot was requested
+                    :commit           0                   ;; commit point in index
+                    :latest-index     0                   ;; most recent index we've heard about from a valid leader (used to determine if we are catching up.. index < latest-index)
+                    :voted-for        nil                 ;; for the :term specified above, who we voted for
+
+                    ;; map of servers participating in consensus. server id is key, state of server is val
+                    :servers          (reduce #(assoc %1 %2 events/server-state-baseline) {} servers) ;; will be set up by leader/reset-server-state
+                    :msg-queue        nil} ;; holds outgoing messages
+        _          (raft-specs/valid-or-throw ::raft-specs/raft raft-init "invalid raft init")
         _          (log/debug "Raft starting with config: " (pr-str config*))
-        raft-state (-> {:id               (rand-int 100000) ;; opaque id, in case multiple raft processes are going
-                        :watch-fns        (atom (if leader-change-fn
-                                                  {::default {:fn leader-change-fn :event-type nil}}
-                                                  {}))
-                        :config           config*
-                        :this-server      this-server
-                        :other-servers    (into [] (filter #(not= this-server %) servers))
-                        :status           nil               ;; candidate, leader, follower
-                        :leader           nil               ;; current known leader
-                        :log-file         (io/file log-directory "0.raft")
-                        :term             0                 ;; latest term
-                        :index            0                 ;; latest index
-                        :snapshot-index   nil               ;; index point of last snapshot
-                        :snapshot-term    0                 ;; term of last snapshot
-                        :snapshot-pending nil               ;; holds pending commit if snapshot was requested
-                        :commit           0                 ;; commit point in index
-                        :latest-index     0                 ;; most recent index we've heard about from a valid leader (used to determine if we are catching up.. index < latest-index)
-                        :voted-for        nil               ;; for the :term specified above, who we voted for
+        raft-state (initialize-raft-state raft-init)]
 
-                        ;; map of servers participating in consensus. server id is key, state of server is val
-                        :servers          (reduce #(assoc %1 %2 events/server-state-baseline) {} servers) ;; will be set up by leader/reset-server-state
-                        :msg-queue        nil}              ;; holds outgoing messages
-
-                       (initialize-raft-state))]
     (log/debug "Raft initialized state:" (pr-str raft-state))
     (event-loop raft-state)
     raft-state))
