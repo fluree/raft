@@ -202,9 +202,9 @@
                                         :leader-change-fn      (fn [{:keys [event cause message old-leader
                                                                             new-leader new-raft-state]}]
                                                                  (log/info
-                                                                   (format "%s reports leader change from %s to %s "
-                                                                           "term: %s event: %s cause: %s"
-                                                                           "message: %s"
+                                                                   (format (str "%s reports leader change from %s to %s "
+                                                                                "term: %s event: %s cause: %s "
+                                                                                "message: %s")
                                                                            server-id old-leader new-leader
                                                                            (:term new-raft-state)
                                                                            event cause message)))
@@ -372,8 +372,9 @@
   (launch-raft-system instances)
   (Thread/sleep 5000) ; give system time to init
   ;; (println "system:" (pr-str @system))
-  (loop [i 0]
-    (println "index:" (read "index"))
+  (write "index" 0)
+  (loop [i (read "index")]
+    (println "index:" i)
     (case i
       5 (add-server system) ; add a server when index hits 5
       10 (add-server system) ; add another server when index hits 10
@@ -383,8 +384,8 @@
     ;(println "Leader:" (get-leader))
     (println "Servers:" (get-servers @system))
     (println)
-    (write "index" i)
-    (recur (inc i))))
+    (cas "index" i (inc i))
+    (recur (read "index"))))
 
 
 (defn -main [& args]

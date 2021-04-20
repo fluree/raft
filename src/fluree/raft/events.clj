@@ -142,7 +142,7 @@
 (defn initialize-config
   "When a new leader is elected, we make sure everyone has the same config"
   [{:keys [this-server] :as raft} data]
-  (let [servers data
+  (let [servers       data
         other-servers (filterv #(not= % this-server) servers)
         servers-map   (reduce #(assoc %1 %2 server-state-baseline) {} servers)]
     (-> raft
@@ -152,17 +152,19 @@
 
 
 (defn config-change
-  [raft-state data callback]
-  (let [{:keys [server op term command-id]} data]
-    (if (< term (:term raft-state))
-      ;; old term!
-      (do (safe-callback callback {:term (:term raft-state) :success false})
-          raft-state))
-    (do (safe-callback callback {:term (:term raft-state) :success true})
-        (assoc raft-state :pending-server (merge server-state-baseline
-                                                 {:id server
-                                                  :op op
-                                                  :command-id command-id})))))
+  [{this-server :this-server, raft-term :term, :as raft-state}
+   {:keys [server op term command-id]} callback]
+  (if (< term raft-term)
+    ;; old term!
+    (do
+      (safe-callback callback {:term raft-term, :success false})
+      raft-state)
+    (let [cfg-change {:id         server
+                      :op         op
+                      :command-id command-id}]
+      (log/info (format "%s changing config: %s" this-server (pr-str cfg-change)))
+      (safe-callback callback {:term raft-term, :success true})
+      (assoc raft-state :pending-server (merge server-state-baseline cfg-change)))))
 
 
 (defn conj-distinct
@@ -175,11 +177,11 @@
    (apply-config-change raft-state req server-state-baseline nil))
   ([raft-state req server-state]
    (apply-config-change raft-state req server-state nil))
-  ([raft-state req server-state callback]
-   (let [{:keys [server command-id op]} req
-         _ (log/info (str "Committing " server " " (subs (str op) 1)
-                          " to the network configuration. Change command id: " command-id))
-         raft-state* (dissoc raft-state :pending-server)]
+  ([{:keys [this-server] :as raft-state} {:keys [server command-id op] :as req}
+    server-state callback]
+   (log/info (format "%s committing %s %s to the network configuration. Change command id: %s"
+                     this-server (name op) server command-id))
+   (let [raft-state* (dissoc raft-state :pending-server)]
      (do (safe-callback callback {:term (:term raft-state*) :success true})
          (condp = op
            :add (if (= (:this-server raft-state) server)
