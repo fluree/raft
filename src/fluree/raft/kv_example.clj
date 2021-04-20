@@ -363,7 +363,7 @@
         new-server (start-instance servers next-id)
         leader (get-leader)
         raft (get-in system [leader :raft])]
-    (raft/add-server raft [:add-server-test next-id])
+    (raft/add-server raft next-id)
     (swap! system-ref #(assoc % next-id new-server))))
 
 
@@ -379,8 +379,8 @@
       10 (add-server system) ; add another server when index hits 10
       nil)
     (Thread/sleep 5000)
-    (view-raft-state 1)
-    (println "Leader:" (get-leader))
+    ;(view-raft-state 1)
+    ;(println "Leader:" (get-leader))
     (println "Servers:" (get-servers @system))
     (println)
     (write "index" i)

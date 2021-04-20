@@ -1,0 +1,32 @@
+<!-- Logback configuration. See http://logback.qos.ch/manual/index.html -->
+<configuration scan="true" debug="true">
+    <statusListener class="ch.qos.logback.core.status.OnConsoleStatusListener"/>
+    <!-- Console output -->
+    <appender name="STDOUT-COLOR" class="ch.qos.logback.core.ConsoleAppender">
+        <!-- encoder defaults to ch.qos.logback.classic.encoder.PatternLayoutEncoder -->
+        <encoder>
+            <!-- ensure logs including exceptions are a single line -->
+            <pattern>%blue(%date) %highlight(%-5level) %white(%logger{24}) - %message - %replace(%xException){"\n", "\\n"}%nopex%n</pattern>
+        </encoder>
+    </appender>
+
+    <appender name="LOG-FILE" class="ch.qos.logback.core.FileAppender">
+        <file>kv-example.log</file>
+        <append>true</append>
+        <encoder>
+            <!-- ensure logs including exceptions are a single line -->
+            <pattern>%blue(%date) %highlight(%-5level) %white(%logger{24}) - %message - %replace(%xException){"\n", "\\n"}%nopex%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="INFO">
+        <!-- <appender-ref ref="STDOUT-COLOR"/> -->
+        <appender-ref ref="LOG-FILE"/>
+    </root>
+
+    <logger name="ch.qos.logback" level="WARN"/>
+    <logger name="fluree.raft.leader" level="INFO"/>
+    <logger name="fluree.raft.events" level="INFO"/>
+    <logger name="fluree.raft.kv-example" level="INFO"/>
+
+</configuration>
