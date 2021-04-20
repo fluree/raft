@@ -9,7 +9,8 @@
             [fluree.raft-specs :as raft-specs]
             [fluree.raft.watch :as watch])
   (:import (java.util UUID)
-           (java.io FileNotFoundException)))
+           (java.io FileNotFoundException)
+           (java.time Instant)))
 
 
 (defrecord RaftCommand [entry id timeout callback])
@@ -122,7 +123,7 @@
             timeout?     (= c timeout-chan)
             start-time   (System/nanoTime)]
         (log/trace (format "%s ..... raft event: %-25s idle: %10s timeout-in: %5sms timeout at: %s (%s) event-data: %s"
-                           (str (java.time.Instant/now))
+                           (str (Instant/now))
                            (str op)
                            (format "%.3fms" (double (/ (- start-time last-stop) 1e6)))
                            (str (- (:timeout-at raft-state) (System/currentTimeMillis)))
