@@ -640,19 +640,20 @@
                             :leader-id  this-server
                             :instant    (System/currentTimeMillis)
                             :command-id command-id}]
-            (do (events/safe-callback callback {:op         :remove
-                                                :server     pending-server
-                                                :command-id command-id
-                                                :message    (str "The server " pending-server " is slated to be removed from the network.")})
-                (reduce (fn [rs recipient-server]
-                          (let [callback (fn [response]
-                                           (async/put! event-chan
-                                                       [:config-change-response
-                                                        {:server   recipient-server
-                                                         :request  req
-                                                         :response response}]))]
-                            (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
-                        raft-state other-servers))))))
+            (log/info (format "%s queueing config change to remove server %s" this-server pending-server))
+            (events/safe-callback callback {:op         :remove
+                                            :server     pending-server
+                                            :command-id command-id
+                                            :message    (str "The server " pending-server " is slated to be removed from the network.")})
+            (reduce (fn [rs recipient-server]
+                      (let [callback (fn [response]
+                                       (async/put! event-chan
+                                                   [:config-change-response
+                                                    {:server   recipient-server
+                                                     :request  req
+                                                     :response response}]))]
+                        (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
+                    raft-state other-servers)))))
 
 
 (defn new-command-event

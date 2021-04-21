@@ -117,6 +117,10 @@
                 (do (swap! state-atom dissoc k)
                     true)
                 false)
+      ;; TODO?: Currently this CAS algorithm doesn't differentiate between
+      ;; "successful update" and "incorrect current value but the new value
+      ;; supplied is already the current value" it will report success in both
+      ;; cases. Is that a problem? 🤔
       :cas (if (contains? @state-atom k)
              (let [new-state (swap! state-atom
                                     (fn [state]
@@ -128,7 +132,7 @@
 
 
 ;; will hold state of our started raft instances
-(def system (atom nil))
+(defonce system (atom nil))
 
 
 (defn send-rpc
@@ -343,13 +347,13 @@
 
 
 (defn next-server-id [system]
-  (->> system
-       keys
-       (map (comp #(Integer/parseInt ^String %) name))
-       (apply max)
-       inc
-       str
-       keyword))
+  (let [ids              (->> system
+                              keys
+                              (map (comp #(Integer/parseInt ^String %) name))
+                              set)
+        first-missing-id (some #(when-not (contains? ids %) %)
+                               (range 1 Integer/MAX_VALUE))]
+    (-> first-missing-id str keyword)))
 
 
 (defn get-servers [system]
@@ -357,32 +361,64 @@
 
 
 (defn add-server [system-ref]
-  (let [system @system-ref
-        next-id (next-server-id system)
-        servers (-> system keys vec)
+  (let [system     @system-ref
+        next-id    (next-server-id system)
+        servers    (-> system keys vec)
         new-server (start-instance servers next-id)
-        leader (get-leader)
-        raft (get-in system [leader :raft])]
+        leader     (get-leader)
+        raft       (get-in system [leader :raft])]
     (raft/add-server raft next-id)
     (swap! system-ref #(assoc % next-id new-server))))
+
+
+(defn remove-server [system-ref server-id]
+  (let [system @system-ref
+        leader (get-leader)
+        raft   (get-in system [leader :raft])]
+    (close system server-id)
+    (raft/remove-server raft server-id)
+    (swap! system-ref #(dissoc % server-id))))
 
 
 (defn run [{:keys [instances]}]
   (println "Running" instances "node key-value example network")
   (launch-raft-system instances)
-  (Thread/sleep 5000) ; give system time to init
+  (Thread/sleep 5000)                                       ; give system time to init
   ;; (println "system:" (pr-str @system))
   (write "index" 0)
   (loop [i (read "index")]
     (println "index:" i)
     (case i
-      5 (add-server system) ; add a server when index hits 5
-      10 (add-server system) ; add another server when index hits 10
+      5 (do
+          (println "Adding new server" (next-server-id @system))
+          (add-server system))
+      10 (do
+           (println "Adding new server" (next-server-id @system))
+           (add-server system))
+      15 (let [removal (-> instances inc str keyword)]
+           (println "Removing server" removal)
+           (remove-server system removal))                  ; remove server added when i was 5
+      20 (do
+           (println "Adding new server" (next-server-id @system))
+           (add-server system))
+      25 (do
+           (println "Adding new server" (next-server-id @system))
+           (add-server system))
+      30 (let [leader (get-leader)]
+           (println "Removing leader" leader)
+           (remove-server system leader))
+      35 (do
+           (println "Adding new server" (next-server-id @system))
+           (add-server system))
+      40 (do
+           (println "Adding new server" (next-server-id @system))
+           (add-server system))
       nil)
-    (Thread/sleep 5000)
+    (Thread/sleep 2000)
     ;(view-raft-state 1)
-    ;(println "Leader:" (get-leader))
-    (println "Servers:" (get-servers @system))
+    (println "Leader:" (get-leader))
+    (let [servers (get-servers @system)]
+      (println (format "%d Servers: %s" (count servers) (sort servers))))
     (println)
     (cas "index" i (inc i))
     (recur (read "index"))))
