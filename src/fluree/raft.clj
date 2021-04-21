@@ -58,13 +58,15 @@
 
 (defn close
   "Closes a raft process."
-  [{:keys [config] :as raft}]
-  (log/info "Shutting down raft")
+  [{:keys [config this-server] :as raft}]
+  (log/info (format "Server %s shutting down raft" this-server))
   (let [{:keys [snapshot-write]} config]
     (when (fn? snapshot-write)
       (let [commit (-> raft raft-state-async async/<!! :commit)]
         (snapshot-write commit
-                        #(log/info "Wrote final snapshot at for index" commit)))))
+                        #(log/info
+                           (format "Server %s wrote final snapshot for index %s"
+                                   this-server commit))))))
   (let [close-fn (:close-fn config)]
     (async/close! (events/event-chan raft))
     (if (fn? close-fn)
@@ -80,10 +82,22 @@
   [raft new-server-id]
   (raft-specs/valid-or-throw ::raft-specs/raft raft "invalid raft state")
   (raft-specs/valid-or-throw ::raft-specs/server-id new-server-id "invalid server id")
-  (let [event-chan (event-chan raft)
+  (let [event-ch   (event-chan raft)
         ch         (async/promise-chan)
         command-id (->> new-server-id name (str "add-server-") keyword)]
-    (async/put! event-chan [:add-server [command-id new-server-id] #(async/put! ch %)])
+    (async/put! event-ch [:add-server [command-id new-server-id] #(async/put! ch %)])
+    ch))
+
+
+(defn remove-server
+  "Removes a server specified by `server-id` from the raft network."
+  [raft server-id]
+  (raft-specs/valid-or-throw ::raft-specs/raft raft "invalid raft state")
+  (raft-specs/valid-or-throw ::raft-specs/server-id server-id "invalid server id")
+  (let [event-ch   (event-chan raft)
+        ch         (async/promise-chan)
+        command-id (->> server-id name (str "remove-server-") keyword)]
+    (async/put! event-ch [:remove-server [command-id server-id] #(async/put! ch %)])
     ch))
 
 
