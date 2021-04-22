@@ -31,7 +31,7 @@
 (s/def ::snapshot-reify ::unspecced-fn)
 (s/def ::snapshot-install ::unspecced-fn)
 (s/def ::snapshot-list-indexes ::unspecced-fn)
-(s/def ::close-fn ::unspecced-fn)
+(s/def ::close-fn (s/nilable ::unspecced-fn))
 (s/def ::leader-change ::unspecced-fn)
 
 ;; These are all core.async channels - hard to spec as of 2021-4-19
@@ -48,7 +48,7 @@
                                  ::snapshot-threshold ::entry-cache-size
                                  ::default-command-timeout ::catch-up-rounds]))
 
-(s/def ::server-id (s/and keyword? #(-> % name Integer/parseInt nat-int?)))
+(s/def ::server-id keyword?)
 (s/def ::this-server ::server-id)
 (s/def ::other-servers (s/coll-of ::server-id :distinct true))
 (s/def ::status (s/nilable #{:candidate :leader :follower}))
