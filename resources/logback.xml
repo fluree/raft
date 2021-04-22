@@ -1,5 +1,5 @@
 <!-- Logback configuration. See http://logback.qos.ch/manual/index.html -->
-<configuration scan="true" debug="true">
+<configuration scan="true">
     <statusListener class="ch.qos.logback.core.status.OnConsoleStatusListener"/>
     <!-- Console output -->
     <appender name="STDOUT-COLOR" class="ch.qos.logback.core.ConsoleAppender">
