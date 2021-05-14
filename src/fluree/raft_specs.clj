@@ -48,7 +48,7 @@
                                  ::snapshot-threshold ::entry-cache-size
                                  ::default-command-timeout ::catch-up-rounds]))
 
-(s/def ::server-id keyword?)
+(s/def ::server-id (s/or :keyword keyword? :string string?))
 (s/def ::this-server ::server-id)
 (s/def ::other-servers (s/coll-of ::server-id :distinct true))
 (s/def ::status (s/nilable #{:candidate :leader :follower}))
