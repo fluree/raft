@@ -494,7 +494,7 @@
                     :config           config*
                     :this-server      this-server
                     :other-servers    (into [] (filter #(not= this-server %) servers))
-                    :status           nil                 ;; candidate, leader, follower
+                    :status           nil                 ;; :candidate, :leader, :follower
                     :leader           nil                 ;; current known leader
                     :log-file         (io/file log-directory "0.raft")
                     :term             0                   ;; latest term
@@ -514,6 +514,9 @@
         raft-state (initialize-raft-state raft-init)]
 
     (log/debug "Raft initialized state:" (pr-str raft-state))
+
+    ;; Add server here before starting event-loop?
+
     (event-loop raft-state)
     raft-state))
 
