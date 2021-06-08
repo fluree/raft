@@ -13,3 +13,6 @@
 .DS_Store
 /raftlog
 /.cpcache/*
+/pom.xml
+/pom.xml.asc
+/kv-example.log

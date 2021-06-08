@@ -1,29 +1,48 @@
-{:deps {org.clojure/clojure       {:mvn/version "1.10.2"}
+{:deps {org.clojure/clojure       {:mvn/version "1.10.3"}
         org.clojure/core.async    {:mvn/version "1.3.610"}
+        org.clojure/test.check    {:mvn/version "1.1.0"}
         org.clojure/tools.logging {:mvn/version "1.1.0"}
         com.taoensso/nippy        {:mvn/version "3.1.1"}}
+
  :aliases
-       {:test
-        {:extra-paths ["test"]
-         :extra-deps  {com.cognitect/test-runner
-                       {:git/url "https://github.com/cognitect-labs/test-runner.git"
-                        :sha     "b6b3193fcc42659d7e46ecd1884a228993441182"}}
-         :main-opts   ["-m" "cognitect.test-runner"]}
+ {:mvn/group-id    com.fluree
+  :mvn/artifact-id raft
+  :mvn/version     "1.0.0-beta2"
 
-        :jar
-        {:extra-deps {seancorfield/depstar {:mvn/version "2.0.193"}}
-         :exec-fn    hf.depstar/jar
-         :exec-args  {:jar "target/fluree-raft.jar"}}
+  :test
+  {:extra-paths ["test" "test-resources"]
+   :extra-deps  {ch.qos.logback/logback-classic {:mvn/version "1.2.3"}}}
 
-        :install
-        {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
-         :exec-fn    deps-deploy.deps-deploy/deploy
-         :exec-args  {:installer :local
-                      :artifact  "target/fluree-raft.jar"}}
+  :runner
+  {:extra-deps {com.cognitect/test-runner
+                {:git/url "https://github.com/cognitect-labs/test-runner.git"
+                 :sha     "b6b3193fcc42659d7e46ecd1884a228993441182"}}
+   :main-opts  ["-m" "cognitect.test-runner"]}
 
-        :deploy
-        {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
-         :exec-fn    deps-deploy.deps-deploy/deploy
-         :exec-args  {:installer      :remote
-                      :sign-releases? true
-                      :artifact       "target/fluree-raft.jar"}}}}
+  :kv-example
+  {:extra-paths ["resources"]
+   :extra-deps  {ch.qos.logback/logback-classic {:mvn/version "1.2.3"}}
+   :exec-fn     fluree.raft.kv-example/run
+   :exec-args   {:instances 3}}
+
+  :jar
+  {:replace-deps {com.github.seancorfield/depstar {:mvn/version "2.0.216"}}
+   :exec-fn      hf.depstar/jar
+   :exec-args    {:jar         "target/fluree-raft.jar"
+                  :group-id    :mvn/group-id
+                  :artifact-id :mvn/artifact-id
+                  :version     :mvn/version
+                  :sync-pom    true}}
+
+  :install
+  {:replace-deps {slipset/deps-deploy {:mvn/version "0.1.5"}}
+   :exec-fn      deps-deploy.deps-deploy/deploy
+   :exec-args    {:installer :local}
+   :artifact     "target/fluree-raft.jar"}
+
+  :deploy
+  {:replace-deps   {slipset/deps-deploy {:mvn/version "0.1.5"}}
+   :exec-fn        deps-deploy.deps-deploy/deploy
+   :exec-args      {:installer :remote}
+   :sign-releases? true
+   :artifact       "target/fluree-raft.jar"}}}
