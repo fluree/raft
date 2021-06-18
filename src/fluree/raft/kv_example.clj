@@ -3,9 +3,11 @@
             [taoensso.nippy :as nippy]
             [clojure.core.async :as async]
             [fluree.raft :as raft]
-            [clojure.tools.logging :as log])
+            [clojure.tools.logging :as log]
+            [fluree.raft.log :as raft-log])
   (:refer-clojure :exclude [read])
-  (:import (java.util UUID)))
+  (:import (java.util UUID)
+           (java.io File)))
 
 
 (defn snapshot-xfer
@@ -77,6 +79,17 @@
       (future
         (nippy/freeze-to-file file state)
         (callback)))))
+
+
+(defn snapshot-list-indexes
+  "Lists all stored snapshot indexes, sorted ascending. Used for bootstrapping a
+  raft network from a previously made snapshot."
+  [path]
+  (fn []
+    (-> path
+        (raft-log/all-log-indexes "snapshot")
+        sort
+        vec)))
 
 
 (defn state-machine
@@ -185,22 +198,24 @@
   (let [rpc-chan           (async/chan)
         state-machine-atom (atom {})
         log-directory      (str "raftlog/" (name server-id) "/")
-        raft               (raft/start {:this-server      server-id
-                                        :leader-change-fn (fn [x] (log/info
-                                                                    (str server-id " reports leader change to: "
-                                                                         (:leader x) " term: " (:term x))))
-                                        :servers          servers
-                                        :timeout-ms       1500
-                                        :heartbeat-ms     500
-                                        :send-rpc-fn      send-rpc
-                                        :log-directory    log-directory
-                                        :log-history      3
-                                        :close-fn         (close-fn rpc-chan server-id)
-                                        :state-machine    (state-machine state-machine-atom)
-                                        :snapshot-write   (snapshot-writer (str log-directory "snapshots/") state-machine-atom)
-                                        :snapshot-reify   (snapshot-reify (str log-directory "snapshots/") state-machine-atom)
-                                        :snapshot-xfer    (snapshot-xfer (str log-directory "snapshots/"))
-                                        :snapshot-install (snapshot-installer (str log-directory "snapshots/"))})]
+        snapshot-dir       (str log-directory "snapshots/")
+        raft               (raft/start {:this-server           server-id
+                                        :leader-change-fn      (fn [x] (log/info
+                                                                         (str server-id " reports leader change to: "
+                                                                              (:leader x) " term: " (:term x))))
+                                        :servers               servers
+                                        :timeout-ms            1500
+                                        :heartbeat-ms          500
+                                        :send-rpc-fn           send-rpc
+                                        :log-directory         log-directory
+                                        :log-history           3
+                                        :close-fn              (close-fn rpc-chan server-id)
+                                        :state-machine         (state-machine state-machine-atom)
+                                        :snapshot-write        (snapshot-writer snapshot-dir state-machine-atom)
+                                        :snapshot-reify        (snapshot-reify snapshot-dir state-machine-atom)
+                                        :snapshot-xfer         (snapshot-xfer snapshot-dir)
+                                        :snapshot-install      (snapshot-installer snapshot-dir)
+                                        :snapshot-list-indexes (snapshot-list-indexes snapshot-dir)})]
     (monitor-incoming-rcp (raft/event-chan raft) rpc-chan server-id)
     {:raft       raft
      :state-atom state-machine-atom

@@ -1,42 +1,46 @@
-{:deps {org.clojure/clojure {:mvn/version "1.10.1"}
-        org.clojure/core.async {:mvn/version "1.2.603"}
+{:deps {org.clojure/clojure       {:mvn/version "1.10.2"}
+        org.clojure/core.async    {:mvn/version "1.3.610"}
         org.clojure/tools.logging {:mvn/version "1.1.0"}
-        com.taoensso/nippy {:mvn/version "2.14.0"}}
+        com.taoensso/nippy        {:mvn/version "3.1.1"}}
  :aliases
- {:test
-  {:extra-paths ["test"]
-   :extra-deps {com.cognitect/test-runner
-                {:git/url "https://github.com/cognitect-labs/test-runner.git"
-                 :sha "f7ef16dc3b8332b0d77bc0274578ad5270fbfedd"}}
-   :main-opts ["-m" "cognitect.test-runner"]}
+       {:test
+        {:extra-paths ["test"]
+         :extra-deps  {com.cognitect/test-runner
+                       {:git/url "https://github.com/cognitect-labs/test-runner.git"
+                        :sha     "b6b3193fcc42659d7e46ecd1884a228993441182"}}
+         :main-opts   ["-m" "cognitect.test-runner"]}
 
-  :jar
-  {:extra-deps {seancorfield/depstar {:mvn/version "1.1.117"}}
-   :main-opts ["-m" "hf.depstar.jar" "target/fluree-raft.jar"]}
+        :jar
+        {:extra-deps {seancorfield/depstar {:mvn/version "2.0.193"}}
+         :exec-fn    hf.depstar/jar
+         :exec-args  {:jar "target/fluree-raft.jar"}}
 
-  :install
-  {:extra-deps {deps-deploy/deps-deploy {:mvn/version "RELEASE"}}
-   :main-opts ["-m" "deps-deploy.deps-deploy" "install"
-               "target/fluree-raft.jar"]}
+        :install
+        {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
+         :exec-fn    deps-deploy.deps-deploy/deploy
+         :exec-args  {:installer :local
+                      :artifact  "target/fluree-raft.jar"}}
+        
+        :deploy
+        {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
+         :exec-fn    deps-deploy.deps-deploy/deploy
+         :exec-args  {:installer      :remote
+                      :sign-releases? true
+                      :artifact       "target/fluree-raft.jar"}}
+        
+        :coverage
+        {:extra-paths ["test"]
+         :extra-deps  {cloverage/cloverage {:mvn/version "1.2.2"}}
+         :main-opts   ["-m" "cloverage.coverage" "-p" "src" "-s" "test" "--output" "scanning_results/coverage"]}
 
-  :deploy
-  {:extra-deps {deps-deploy/deps-deploy {:mvn/version "RELEASE"}}
-   :main-opts ["-m" "deps-deploy.deps-deploy" "deploy"
-               "target/fluree-raft.jar"]}
-  
-  :coverage
-  {:extra-paths ["test"]
-   :extra-deps  {cloverage/cloverage {:mvn/version "1.2.2"}}
-   :main-opts   ["-m" "cloverage.coverage" "-p" "src" "-s" "test" "--output" "scanning_results/coverage"]}
+        :eastwood
+        {:extra-deps {jonase/eastwood {:mvn/version "RELEASE"}}
+         :main-opts ["-m" "eastwood.lint" {:source-paths ["src"] :out "scanning_results/eastwood.out"}]}
 
-  :eastwood
-  {:extra-deps {jonase/eastwood {:mvn/version "RELEASE"}}
-   :main-opts ["-m" "eastwood.lint" {:source-paths ["src"] :out "scanning_results/eastwood.out"}]}
+        :ancient
+        {:extra-deps {com.github.liquidz/antq {:mvn/version "RELEASE"}}
+         :main-opts ["-m" "antq.core"]}
 
-  :ancient
-  {:extra-deps {com.github.liquidz/antq {:mvn/version "RELEASE"}}
-   :main-opts ["-m" "antq.core"]}
-
-  :clj-kondo
-  {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2021.06.01"}}
-   :main-opts ["-m" "clj-kondo.main" "--lint" "src" "--config" ".clj-kondo/config.edn"]}}}
+        :clj-kondo
+        {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2021.06.01"}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "--config" ".clj-kondo/config.edn"]}}}

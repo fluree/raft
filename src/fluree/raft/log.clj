@@ -286,7 +286,7 @@
   ([path]
    (all-log-indexes path "raft"))
   ([path type]
-   (->> (file-seq (clojure.java.io/file path))
+   (->> (file-seq (io/file path))
         (filter #(.isFile ^File %))
         (keep #(return-log-id % type)))))
 

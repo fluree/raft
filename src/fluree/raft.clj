@@ -6,7 +6,8 @@
             [fluree.raft.leader :as leader]
             [fluree.raft.events :as events]
             [fluree.raft.watch :as watch])
-  (:import (java.util UUID)))
+  (:import (java.util UUID)
+           (java.io FileNotFoundException)))
 
 (defrecord RaftCommand [entry id timeout callback])
 
@@ -34,10 +35,31 @@
   (invoke-rpc* (events/event-chan raft) operation data callback))
 
 
+(defn get-raft-state
+  "Polls raft loop and returns state to provided callback."
+  [raft callback]
+  (let [event-chan (event-chan raft)]
+    (async/put! event-chan [:raft-state nil callback])))
+
+
+(defn raft-state-async
+  "Polls raft loop and puts state on returned channel."
+  [raft]
+  (let [ch (async/promise-chan)]
+    (get-raft-state raft #(async/put! ch %))
+    ch))
+
+
 (defn close
   "Closes a raft process."
-  [raft]
-  (let [close-fn (get-in raft [:config :close-fn])]
+  [{:keys [config] :as raft}]
+  (log/info "Shutting down raft")
+  (let [{:keys [snapshot-write]} config]
+    (when (fn? snapshot-write)
+      (let [commit (-> raft raft-state-async async/<!! :commit)]
+        (snapshot-write commit
+                        #(log/info "Wrote final snapshot at for index" commit)))))
+  (let [close-fn (:close-fn config)]
     (async/close! (events/event-chan raft))
     (if (fn? close-fn)
       (close-fn)
@@ -113,8 +135,8 @@
                     (if (leader/is-leader? raft-state)
                       (leader/queue-config-change raft-state data callback :add)
                       (do (events/safe-callback callback (ex-info "Server is not currently leader."
-                                                                {:operation :new-command
-                                                                 :error     :raft/not-leader})) raft-state))
+                                                                  {:operation :new-command
+                                                                   :error     :raft/not-leader})) raft-state))
 
                     ;; Leader initiates remove-server process. In removing a server, can immediately send config-change.
                     :remove-server
@@ -282,13 +304,6 @@
      (new-command raft command nil))))
 
 
-(defn view-raft-state
-  "Polls raft loop and returns state to provided callback."
-  [raft callback]
-  (let [event-chan (event-chan raft)]
-    (async/put! event-chan [:raft-state nil callback])))
-
-
 (defn monitor-raft
   "Debugging tool, registers a single-argument callback fn that will be
   called with each new raft event. To remove existing listen-fn, provide
@@ -304,14 +319,20 @@
     (async/put! event-chan [:monitor callback])))
 
 
+(defn latest-stored-snapshot [{:keys [snapshot-list-indexes] :as config}]
+  (log/debug "Getting latest stored snapshot with" snapshot-list-indexes)
+  (let [indexes (snapshot-list-indexes)]
+    (log/debug "Got indexes:" indexes)
+    (last indexes)))
+
+
 (defn- initialize-raft-state
-  [raft-state]
+  [{{:keys [log-directory snapshot-reify] :as config} :config :as raft-state}]
   (try
-    (let [{:keys [log-directory snapshot-reify]} (:config raft-state)
-          latest-log       (or (raft-log/latest-log-index log-directory) 0)
+    (let [latest-log       (or (raft-log/latest-log-index log-directory) 0)
           latest-log-file  (io/file log-directory (str latest-log ".raft"))
           log-entries      (try (raft-log/read-log-file latest-log-file)
-                                (catch java.io.FileNotFoundException _ nil))
+                                (catch FileNotFoundException _ nil))
           raft-state*      (reduce
                              (fn [raft-state* entry]
                                (let [[index term entry-type data] entry]
@@ -335,6 +356,13 @@
                                    (= :no-op entry-type)
                                    raft-state*)))
                              raft-state log-entries)
+          raft-state*      (if (empty? log-entries)
+                             (do
+                               (log/debug "No log entries; trying to reify a snapshot")
+                               (assoc raft-state*
+                                 :snapshot-index
+                                 (latest-stored-snapshot config)))
+                             raft-state*)
           snapshot-index   (when (pos-int? (:snapshot-index raft-state*))
                              (:snapshot-index raft-state*))
           snapshot-loaded? (when snapshot-index             ;; if a snapshot exists, reify it into the state-machine
@@ -350,30 +378,31 @@
                 snapshot-index (assoc :index (max (:index raft-state*) snapshot-index)
                                       :commit snapshot-index))))
     (catch Exception e (log/error e "Error initializing raft state from logs in: "
-                                  (-> raft-state :config :log-directory)))))
+                                  log-directory))))
 
 
 (defn start
   "Config map consists of the following keys:
 
-  - this-server         string|keyword     For example, myserver1. No default.
-  - servers             [string|keyword]   For example, [myserver1, myserver2]. No default.
-  - timeout-ms          int                Election timeout, good range is 10ms->500ms. By default, 500.
-  - heartbeat-ms        int                By default, 100.
-  - log-history         int                Number of historical log files to retain. By default 10.
-  - snapshot-threshold  int                Number of log entries since last snapshot (minimum) to generate new snapshot. By default, 100.
-  - log-directory       string             Directory where raft logs are stored. By default, \"raftlog/\"
-  - state-machine       fn                 See kv_example for sample.
-  - snapshot-write      fn                 See kv_example for sample.
-  - snapshot-xfer       fn                 See kv_example for sample.
-  - snapshot-install    fn                 See kv_example for sample.
-  - snapshot-reify      fn                 See kv_example for sample.
-  - send-rpc-fn         fn                 See kv_example for sample.
-  - default-command-timeout int            By default, 4000.
-  - close-fn            fn                 See kv_example for sample.
-  - event-chan          async/chan
-  - command-chan        async/chan
-  - entries-max         int                Maximum number of entries we will send at once to any server. By default, 50.
+  - this-server             string|keyword     For example, myserver1. No default.
+  - servers                 [string|keyword]   For example, [myserver1, myserver2]. No default.
+  - timeout-ms              int                Election timeout, good range is 10ms->500ms. By default, 500.
+  - heartbeat-ms            int                By default, 100.
+  - log-history             int                Number of historical log files to retain. By default 10.
+  - snapshot-threshold      int                Number of log entries since last snapshot (minimum) to generate new snapshot. By default, 100.
+  - log-directory           string             Directory where raft logs are stored. By default, \"raftlog/\"
+  - state-machine           fn                 See kv_example for sample.
+  - snapshot-write          fn                 See kv_example for sample.
+  - snapshot-xfer           fn                 See kv_example for sample.
+  - snapshot-install        fn                 See kv_example for sample.
+  - snapshot-reify          fn                 See kv_example for sample.
+  - snapshot-list-indexes   fn                 See kv_example for sample.
+  - send-rpc-fn             fn                 See kv_example for sample.
+  - default-command-timeout int                By default, 4000.
+  - close-fn                fn                 See kv_example for sample.
+  - event-chan              async/chan
+  - command-chan            async/chan
+  - entries-max             int                Maximum number of entries we will send at once to any server. By default, 50.
   - entry-cache-size
 
   "
@@ -381,21 +410,21 @@
   (let [{:keys [this-server servers timeout-ms heartbeat-ms
                 log-history snapshot-threshold log-directory state-machine
                 snapshot-write snapshot-xfer snapshot-install snapshot-reify
-                send-rpc-fn default-command-timeout close-fn
-                catch-up-rounds
-                leader-change-fn                       ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
+                snapshot-list-indexes send-rpc-fn default-command-timeout
+                close-fn catch-up-rounds
+                leader-change-fn                            ;; optional, single-arg fn called each time there is a leader change with current raft state. Current leader (or null) is in key :leader
                 event-chan command-chan
                 entries-max entry-cache-size]
-         :or   {timeout-ms              500            ;; election timeout, good range is 10ms->500ms
-                heartbeat-ms            100            ;; heartbeat time in milliseconds
-                log-history             10             ;; number of historical log files to retain
-                snapshot-threshold      100            ;; number of log entries since last snapshot (minimum) to generate new snapshot
+         :or   {timeout-ms              500                 ;; election timeout, good range is 10ms->500ms
+                heartbeat-ms            100                 ;; heartbeat time in milliseconds
+                log-history             10                  ;; number of historical log files to retain
+                snapshot-threshold      100                 ;; number of log entries since last snapshot (minimum) to generate new snapshot
                 default-command-timeout 4000
                 catch-up-rounds         10
                 log-directory           "raftlog/"
                 event-chan              (async/chan)
                 command-chan            (async/chan)
-                entries-max             50}} config    ;; maximum number of entries we will send at once to any server
+                entries-max             50}} config         ;; maximum number of entries we will send at once to any server
         _          (assert (fn? state-machine))
         _          (assert (fn? snapshot-write))
         _          (assert (fn? snapshot-reify))
@@ -413,9 +442,10 @@
                                  :snapshot-xfer snapshot-xfer
                                  :snapshot-reify snapshot-reify
                                  :snapshot-install snapshot-install
+                                 :snapshot-list-indexes snapshot-list-indexes
                                  :event-chan event-chan
                                  :command-chan command-chan
-                                 :close close-fn
+                                 :close-fn close-fn
                                  :leader-change leader-change-fn
                                  :default-command-timeout default-command-timeout
                                  :entries-max entries-max
@@ -443,10 +473,10 @@
 
                         ;; map of servers participating in consensus. server id is key, state of server is val
                         :servers          (reduce #(assoc %1 %2 events/server-state-baseline) {} servers) ;; will be set up by leader/reset-server-state
-                        :msg-queue        nil}               ;; holds outgoing messages
+                        :msg-queue        nil}              ;; holds outgoing messages
 
                        (initialize-raft-state))]
-    (log/debug "Raft initialized state: " (pr-str raft-state))
+    (log/debug "Raft initialized state:" (pr-str raft-state))
     (event-loop raft-state)
     raft-state))
 

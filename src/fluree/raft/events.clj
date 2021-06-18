@@ -135,6 +135,7 @@
     ;; register command id to raft-state for use when processing new commits to state machine
     (assoc-in raft-state [:command-callbacks command-id] resp-chan)))
 
+
 ;; TODO - this is not actually used, need to enforce
 (defn initialize-config
   "When a new leader is elected, we make sure everyone has the same config"
@@ -146,6 +147,7 @@
         (assoc-in [:config :servers] servers)
         (assoc-in [:other-servers] other-servers)
         (assoc :servers servers-map))))
+
 
 (defn config-change
   [raft-state data callback]
@@ -160,9 +162,11 @@
                                                   :op op
                                                   :command-id command-id})))))
 
+
 (defn conj-distinct
   [val add]
   (-> (conj val add) set vec))
+
 
 (defn apply-config-change
   ([raft-state req]
