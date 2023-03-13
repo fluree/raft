@@ -54,11 +54,6 @@
   "Closes a raft process."
   [{:keys [config] :as raft}]
   (log/info "Shutting down raft")
-  (let [{:keys [snapshot-write]} config]
-    (when (fn? snapshot-write)
-      (let [commit (-> raft raft-state-async async/<!! :commit)]
-        (snapshot-write commit
-                        #(log/info "Wrote final snapshot at for index" commit)))))
   (let [close-fn (:close-fn config)]
     (async/close! (events/event-chan raft))
     (if (fn? close-fn)
