@@ -54,11 +54,6 @@
   "Closes a raft process."
   [{:keys [config] :as raft}]
   (log/info "Shutting down raft")
-  (let [{:keys [snapshot-write]} config]
-    (when (fn? snapshot-write)
-      (let [commit (-> raft raft-state-async async/<!! :commit)]
-        (snapshot-write commit
-                        #(log/info "Wrote final snapshot at for index" commit)))))
   (let [close-fn (:close-fn config)]
     (async/close! (events/event-chan raft))
     (if (fn? close-fn)
@@ -356,13 +351,6 @@
                                    (= :no-op entry-type)
                                    raft-state*)))
                              raft-state log-entries)
-          raft-state*      (if (empty? log-entries)
-                             (do
-                               (log/debug "No log entries; trying to reify a snapshot")
-                               (assoc raft-state*
-                                 :snapshot-index
-                                 (latest-stored-snapshot config)))
-                             raft-state*)
           snapshot-index   (when (pos-int? (:snapshot-index raft-state*))
                              (:snapshot-index raft-state*))
           snapshot-loaded? (when snapshot-index             ;; if a snapshot exists, reify it into the state-machine
