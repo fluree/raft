@@ -351,13 +351,6 @@
                                    (= :no-op entry-type)
                                    raft-state*)))
                              raft-state log-entries)
-          raft-state*      (if (empty? log-entries)
-                             (do
-                               (log/debug "No log entries; trying to reify a snapshot")
-                               (assoc raft-state*
-                                 :snapshot-index
-                                 (latest-stored-snapshot config)))
-                             raft-state*)
           snapshot-index   (when (pos-int? (:snapshot-index raft-state*))
                              (:snapshot-index raft-state*))
           snapshot-loaded? (when snapshot-index             ;; if a snapshot exists, reify it into the state-machine
