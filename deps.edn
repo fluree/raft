@@ -3,11 +3,16 @@
         org.clojure/tools.logging {:mvn/version "1.1.0"}
         com.taoensso/nippy        {:mvn/version "3.1.1"}}
  :aliases
-       {:test
+       {:dev
+        {:extra-paths ["test"]
+         :extra-deps {com.magnars/test-with-files {:mvn/version "2021-02-17"}}}
+
+        :test
         {:extra-paths ["test"]
          :extra-deps  {com.cognitect/test-runner
                        {:git/url "https://github.com/cognitect-labs/test-runner.git"
-                        :sha     "f597341b6ca7bb4cf027e0a34a6710ca9cb969da"}}
+                        :sha     "f597341b6ca7bb4cf027e0a34a6710ca9cb969da"}
+                       com.magnars/test-with-files {:mvn/version "2021-02-17"}}
          :main-opts   ["-m" "cognitect.test-runner"]}
 
         :jar
