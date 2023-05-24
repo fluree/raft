@@ -2,21 +2,23 @@
   (:require [clojure.java.io :as io]
             [taoensso.nippy :as nippy]
             [clojure.tools.logging :as log])
-  (:import (java.io FileNotFoundException DataInputStream RandomAccessFile File)))
+  (:import (java.io EOFException FileNotFoundException DataInputStream RandomAccessFile File)
+           (java.net URI)
+           (java.nio.file CopyOption Files Paths StandardCopyOption)))
 
 
 ;; if an index is not a positive integer (an append-entry), it is one of these special types:
-(def ^:const entry-types {:current-term -1                  ;; record of latest term we've seen
-                          :voted-for    -2                  ;; record of votes
-                          :snapshot     -3                  ;; record of new snapshots
-                          :no-op        -4})                ;; used to clear out entries that are found to be incorrect
+(def ^:const entry-types {:current-term -1 ;; record of the latest term we've seen
+                          :voted-for    -2 ;; record of votes
+                          :snapshot     -3 ;; record of new snapshots
+                          :no-op        -4}) ;; used to clear out entries that are found to be incorrect
 
 
 ;; reverse map of above
 (def ^:const entry-types' (into {} (map (fn [[k v]] [v k]) entry-types)))
 
 
-(defn- write-entry
+(defn write-entry
   "Writes entry to specified log"
   ([^File file index term entry] (write-entry file index term entry true))
   ([^File file index term entry retry?]
@@ -44,6 +46,13 @@
        (log/error e "Fatal Error, exiting.")
        (System/exit 1)))))
 
+(defn write-log
+  "Writes an entire log of entries provided as a sequence. Log entries are 4-tuples (identical format to read-log):
+  [index term entry-type entry-data]"
+  [^File file log]
+  (doseq [[index term _ entry-data] log]
+    (write-entry file index term entry-data false)))
+
 
 (defn write-current-term
   "Record latest term we've seen to persistent log."
@@ -67,38 +76,166 @@
   (write-entry file index (:term entry) entry))
 
 
+(defn log-corrupt-exception
+  "Given an exception thrown that is discovered in a corrupt log file, log its output in a readable format."
+  [exception]
+  (let [{:keys [file-name next-bytes index term]} (ex-data exception)
+        msg        (str "Raft log EOF (End of File) exception reading from file: " file-name ". "
+                        "Successful recovery, returning complete log entries up to the last message. "
+                        "Likely a previous unexpected shutdown happened while writing the corrupted entry. ")
+        error-at   (cond
+                     (nil? next-bytes) "Corruption happened when writing the number of bytes contained in the next entry. "
+                     (nil? index) "Corruption happened when writing the log index number. "
+                     (nil? term) "Corruption happened when writing the raft term number. "
+                     :else "Corruption happened when writing the log entry data. ")
+        known-info (cond
+                     (nil? next-bytes) "No information could be retrieved from the specific log entry."
+                     (nil? index) (str "The log entry was expected to be " next-bytes " bytes.")
+                     (nil? term) (str "The log entry would have been for index: " index " and " next-bytes " bytes.")
+                     :else (str "The log entry would have been for index: " index
+                                " and term: " term " with " next-bytes " bytes."))]
+    (log/warn (str msg error-at known-info))))
+
+(defn move-log
+  "Moves a log file from the source-path to destination-path"
+  [source-path destination-path]
+  (let [source-uri      (URI/create (str "file://" source-path))
+        destination-uri (URI/create (str "file://" destination-path))
+        source          (Paths/get source-uri)
+        destination     (Paths/get destination-uri)]
+    (Files/move source destination
+                (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
+                                        StandardCopyOption/REPLACE_EXISTING]))))
+
+(defn copy-corrupt-file
+  "Creates a copy (for forensics) of a corrupt raft file using the '.corrupt. extension"
+  [^File file]
+  (let [source-path      (.getPath file)
+        destination-path (str source-path ".corrupt")
+        destination      (io/file destination-path)]
+    (log/info (str "Copying corrupted log file for forensics from: " source-path " to: " destination-path))
+    (io/copy file destination)
+    (log/debug (str "Successfully created file: " destination-path))
+    :done))
+
+(defn repair-file
+  "When we have an end of file exception due to a corrupt final log entry,
+  we need to fix the file so that the log can continue to be used."
+  [^File file log]
+  (try
+    (log/debug (str "About to repair log file: " (.getName file) " with " (count log) " valid entries."))
+    (let [source-path (.getPath file)
+          repair-path (str source-path ".repaired")
+          repair-file (io/file repair-path)]
+      (copy-corrupt-file file)
+      (log/debug (str "Repairing log file: Writing new correct log to: " repair-path " as a temporary file."))
+      (write-log repair-file log)
+      (log/debug (str "Repairing log file: Done writing temporary file: " repair-path
+                      ". Moving temporary file to replace original corrupt log: " source-path))
+      (move-log repair-file source-path)
+      true)
+    (catch Exception e
+      (throw (ex-info (str "Error creating repaired raft log file: " (.getName file)
+                           " with exception: " (ex-message e))
+                      {:file-name (.getName file)}
+                      e)))))
+
+(defn throw-corrupt-file-exception
+  "When reading a raft log file, report out a consistent format for exceptions if they occur."
+  [message exception ^RandomAccessFile raf file-name next-bytes index term entry-type entry-data]
+  (let [file-length  (.length raf)
+        file-pointer (.getFilePointer raf)
+        EOF?         (instance? EOFException exception)]
+    (throw (ex-info message
+                    {:status                 500
+                     :error                  :raft/corrupt-log
+                     :file-name              file-name
+                     :file-length            file-length
+                     :file-pointer           file-pointer
+                     :end-of-file-exception? EOF?
+                     :next-bytes             next-bytes
+                     :index                  index
+                     :term                   term
+                     :entry-type             entry-type
+                     :entry-data             entry-data}
+                    exception))))
+
+(defn read-next-entry
+  "Reads the next entry in a raft log file, returns 4-tuple of:
+  [index term entry-type entry-data] or an ex-info exception if there
+  was an error reading."
+  [^RandomAccessFile raf file-name]
+  (let [next-bytes (try (.readInt raf)
+                        (catch EOFException eof-ex
+                          (throw-corrupt-file-exception (str "Corrupt last entry in raft log: " file-name)
+                                                        eof-ex raf file-name nil nil nil nil nil))
+                        (catch Exception e (throw e)))
+        index      (try (.readLong raf)
+                        (catch EOFException eof-ex
+                          (throw-corrupt-file-exception (str "Corrupt last entry in raft log: " file-name)
+                                                        eof-ex raf file-name next-bytes nil nil nil nil))
+                        (catch Exception e (throw e)))
+        entry-type (if (pos? index) :append-entry (get entry-types' index))
+        term       (try (.readLong raf)
+                        (catch EOFException eof-ex
+                          (throw-corrupt-file-exception (str "Corrupt last entry in raft log: " file-name)
+                                                        eof-ex raf file-name next-bytes index nil entry-type nil))
+                        (catch Exception e (throw e)))
+        ba         (byte-array next-bytes)
+        _          (try (.readFully raf ba)
+                        (catch EOFException eof-ex
+                          (throw-corrupt-file-exception (str "Corrupt last entry in raft log: " file-name)
+                                                        eof-ex raf file-name next-bytes index term entry-type nil))
+                        (catch Exception e (throw e)))
+        entry-data (try (nippy/thaw ba)
+                        (catch Exception e
+                          (let [message (str "Unexpected exception when deserializing raft log entry: " file-name)]
+                            (throw-corrupt-file-exception message e raf file-name next-bytes index term entry-type nil))))]
+    [index term entry-type entry-data]))
+
+
 (defn read-log-file
   "Reads entire log file."
   [^File file]
-  (let [raf (RandomAccessFile. file "r")
-        len (.length raf)]
+  (let [raf       (RandomAccessFile. file "r")
+        len       (.length raf)
+        file-name (.getName file)]
     (loop [log []]
       (if (>= (.getFilePointer raf) len)
         (do
           (.close raf)
           log)
-        (let [next-bytes (.readInt raf)
-              ba         (byte-array next-bytes)
-              index      (.readLong raf)
-              term       (.readLong raf)
-              _          (.read raf ba)                     ;; read entry into byte-array
-              entry-type (if (pos? index) :append-entry (get entry-types' index))
-              entry-data (try (nippy/thaw ba)
-                              (catch Exception e (throw (ex-info
-                                                          "Raft log file appears to be corrupt. If you have an existing Raft quorom, (for example, you have 3 servers running and 2 have non-corrupted Raft files), delete raft logs for this server and re-start. It will re-sync from other servers. If you do not have an existing quorom, email support@flur.ee"
+        (let [next-entry (try (read-next-entry raf file-name)
+                              (catch Exception e
+                                (let [EOF?         (-> e ex-data :end-of-file-exception?)
+                                      log-entries  (count log)
+                                      first-entry? (zero? log-entries)
+                                      repairable?  (and EOF? (not first-entry?))]
+                                  (cond repairable? (do
+                                                      (log/warn (str "Repairing corrupt log file, saving a copy to: " file-name ".corrupt"))
+                                                      (log-corrupt-exception e)
+                                                      (.close raf)
+                                                      (repair-file file log)
+                                                      (log/warn (str "Finished repairing corrupt log file: " file-name))
+                                                      :repaired-log)
+                                        first-entry? (do
+                                                       (log/warn "First entry of raft log file is corrupt, removing file after creating a copy.")
+                                                       (log-corrupt-exception e)
+                                                       (.close raf)
+                                                       (copy-corrupt-file file)
+                                                       (.delete file)
+                                                       (log/warn "Successfully removed corrupted log file, restart service.")
+                                                       (log/warn "Exiting! Restart service, which should successfully load last complete log file.")
+                                                       (System/exit 1))
+                                        ;; not repairable, throw exception upstream
+                                        :else (do (.close raf)
+                                                  (throw e))))))]
+          (if (= :repaired-log next-entry)
+            log
+            (recur (conj log next-entry))))))))
 
-                                                          {:file            (.getPath file)
-                                                           :entry-number    (inc (count log))
-                                                           :entry-type-code index
-                                                           :entry-type      entry-type
-                                                           :entry-term      term
-                                                           :entry-bytes     next-bytes
-                                                           :bytes           (vec ba)
-                                                           :error           (.getMessage e)}))))]
-          (recur (conj log [index term entry-type entry-data])))))))
 
-
-(defn- read-entry
+(defn read-entry
   "Reads a specific index entry from durable log.
 
   Entries contain:
