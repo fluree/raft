@@ -8,10 +8,10 @@
 
 
 ;; if an index is not a positive integer (an append-entry), it is one of these special types:
-(def ^:const entry-types {:current-term -1                  ;; record of latest term we've seen
-                          :voted-for    -2                  ;; record of votes
-                          :snapshot     -3                  ;; record of new snapshots
-                          :no-op        -4})                ;; used to clear out entries that are found to be incorrect
+(def ^:const entry-types {:current-term -1 ;; record of the latest term we've seen
+                          :voted-for    -2 ;; record of votes
+                          :snapshot     -3 ;; record of new snapshots
+                          :no-op        -4}) ;; used to clear out entries that are found to be incorrect
 
 
 ;; reverse map of above
@@ -145,7 +145,7 @@
   [message exception ^RandomAccessFile raf file-name next-bytes index term entry-type entry-data]
   (let [file-length  (.length raf)
         file-pointer (.getFilePointer raf)
-        EOF?         (= file-length file-pointer)]
+        EOF?         (instance? EOFException exception)]
     (throw (ex-info message
                     {:status                 500
                      :error                  :raft/corrupt-log
@@ -182,17 +182,14 @@
                                                         eof-ex raf file-name next-bytes index nil entry-type nil))
                         (catch Exception e (throw e)))
         ba         (byte-array next-bytes)
-        _          (try (.read raf ba)
+        _          (try (.readFully raf ba)
                         (catch EOFException eof-ex
                           (throw-corrupt-file-exception (str "Corrupt last entry in raft log: " file-name)
                                                         eof-ex raf file-name next-bytes index term entry-type nil))
                         (catch Exception e (throw e)))
         entry-data (try (nippy/thaw ba)
                         (catch Exception e
-                          (let [EOF?    (= (.length raf) (.getFilePointer raf)) ;; were we reading the last log entry in the file?
-                                message (if EOF?
-                                          (str "Corrupt last entry in raft log: " file-name)
-                                          (str "Unexpected exception when deserializing raft log entry: " file-name))]
+                          (let [message (str "Unexpected exception when deserializing raft log entry: " file-name)]
                             (throw-corrupt-file-exception message e raf file-name next-bytes index term entry-type nil))))]
     [index term entry-type entry-data]))
 
