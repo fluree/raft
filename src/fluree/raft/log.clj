@@ -97,15 +97,11 @@
     (log/warn (str msg error-at known-info))))
 
 (defn move-log
-  "Moves a log file from the source-path to destination-path"
-  [source-path destination-path]
-  (let [source-uri      (URI/create (str "file://" source-path))
-        destination-uri (URI/create (str "file://" destination-path))
-        source          (Paths/get source-uri)
-        destination     (Paths/get destination-uri)]
-    (Files/move source destination
-                (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
-                                        StandardCopyOption/REPLACE_EXISTING]))))
+  "Moves the source log file to destination-file."
+  [source-file destination-file]
+  (Files/move (.toPath source-file) (.toPath destination-file)
+              (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
+                                      StandardCopyOption/REPLACE_EXISTING])))
 
 (defn copy-corrupt-file
   "Creates a copy (for forensics) of a corrupt raft file using the '.corrupt. extension"
@@ -132,7 +128,7 @@
       (write-log repair-file log)
       (log/debug (str "Repairing log file: Done writing temporary file: " repair-path
                       ". Moving temporary file to replace original corrupt log: " source-path))
-      (move-log repair-file source-path)
+      (move-log repair-file file)
       true)
     (catch Exception e
       (throw (ex-info (str "Error creating repaired raft log file: " (.getName file)
