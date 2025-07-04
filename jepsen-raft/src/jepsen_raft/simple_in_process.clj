@@ -15,7 +15,6 @@
 
 ;; Global state - kept separate from test to avoid serialization issues
 (defonce ^:private nodes (atom {}))
-(defonce ^:private crashed-processes (atom #{}))
 
 (defn create-state-machine
   "Creates a state machine function for Jepsen operations.
@@ -140,26 +139,22 @@
   (setup! [_ _])
   
   (invoke! [this test op]
-    ; Check if this process already timed out - if so, crash it
-    (if (contains? @crashed-processes (:process op))
-      (assoc op :type :fail :error :process-crashed)
-      (if-let [node-data (get @nodes (:node this))]
-        (let [raft-node (:raft node-data)
-              timeout (:operation-timeout-ms util/default-timeouts)
-              result-promise (promise)
-              ; Only pass the operation data, not Jepsen metadata
-              entry (select-keys op [:f :key :value :old :new])]
-          (raft/new-entry raft-node entry
-                          (fn [result] (deliver result-promise result))
-                          timeout)
-          (let [result (deref result-promise (+ timeout 1000) :timeout)]
-            (if (= result :timeout)
-              (do
-                ; Mark this process as crashed so it won't invoke again
-                (swap! crashed-processes conj (:process op))
-                (assoc op :type :info :error :timeout))
-              (merge op result))))
-        (assoc op :type :fail :error :no-node))))
+    ; Don't crash processes on timeout - just return the timeout error
+    ; This prevents the linearizability checker from seeing duplicate process operations
+    (if-let [node-data (get @nodes (:node this))]
+      (let [raft-node (:raft node-data)
+            timeout (:operation-timeout-ms util/default-timeouts)
+            result-promise (promise)
+            ; Only pass the operation data, not Jepsen metadata
+            entry (select-keys op [:f :key :value :old :new])]
+        (raft/new-entry raft-node entry
+                        (fn [result] (deliver result-promise result))
+                        timeout)
+        (let [result (deref result-promise (+ timeout 1000) :timeout)]
+          (if (= result :timeout)
+            (assoc op :type :info :error :timeout)
+            (merge op result))))
+      (assoc op :type :fail :error :no-node)))
   
   (teardown! [_ _])
   
@@ -175,6 +170,7 @@
 (defn simple-test
   [opts]
   (merge tests/noop-test
+         opts
          {:name "raft-simple"
           :pure-generators true
           :nodes ["n1" "n2" "n3"]
@@ -196,8 +192,7 @@
   []
   (doseq [[node-id _] @nodes]
     (stop-node node-id))
-  (reset! nodes {})
-  (reset! crashed-processes #{}))
+  (reset! nodes {}))
 
 (defn -main
   "Main entry point for running the simplified Jepsen test"
