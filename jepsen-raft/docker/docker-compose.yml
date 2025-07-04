@@ -37,6 +37,8 @@ services:
     build:
       context: ../../..
       dockerfile: raft/jepsen-raft/docker/node/Dockerfile
+    ports:
+      - "7001:7001"
     networks:
       jepsen:
         ipv4_address: 10.100.0.11
@@ -56,6 +58,8 @@ services:
     build:
       context: ../../..
       dockerfile: raft/jepsen-raft/docker/node/Dockerfile
+    ports:
+      - "7002:7001"
     networks:
       jepsen:
         ipv4_address: 10.100.0.12
@@ -75,6 +79,8 @@ services:
     build:
       context: ../../..
       dockerfile: raft/jepsen-raft/docker/node/Dockerfile
+    ports:
+      - "7003:7001"
     networks:
       jepsen:
         ipv4_address: 10.100.0.13

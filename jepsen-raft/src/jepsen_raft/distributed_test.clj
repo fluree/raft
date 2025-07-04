@@ -1,5 +1,6 @@
 (ns jepsen-raft.distributed-test
   (:require [clojure.tools.logging :refer [info error]]
+            [clojure.data.json :as json]
             [jepsen [cli :as cli]
                     [db :as db]
                     [tests :as tests]
@@ -13,31 +14,31 @@
             [jepsen-raft.util :as util]))
 
 (def node-ports
-  "Map of node names to their HTTP ports"
+  "Map of node names to their HTTP ports on localhost"
   {"n1" 7001
-   "n2" 7001  
-   "n3" 7001})
+   "n2" 7002  
+   "n3" 7003})
 
 (defn node-url
   "Get the HTTP URL for a node"
   [node endpoint]
-  (str "http://" node ":" (get node-ports node) endpoint))
+  (str "http://localhost:" (get node-ports node) endpoint))
 
 (defn wait-for-leader
   "Wait for the cluster to elect a leader"
   [nodes timeout-ms]
   (let [start (System/currentTimeMillis)]
     (loop []
-      (when (< (- (System/currentTimeMillis) start) timeout-ms)
+      (if (>= (- (System/currentTimeMillis) start) timeout-ms)
+        false
         (let [states (doall
                       (for [node nodes]
                         (try
                           (let [response (http/get (node-url node "/health")
-                                                   {:as :json
-                                                    :timeout 1000
+                                                   {:timeout 1000
                                                     :throw-exceptions false})]
                             (when (= 200 (:status response))
-                              (:body response)))
+                              (json/read-str (:body response) :key-fn keyword)))
                           (catch Exception e
                             nil))))]
           (if (some #(and % (true? (:node-ready %))) states)
@@ -68,16 +69,19 @@
   
   (setup! [this test]
     ; Wait for cluster to be ready
-    (wait-for-leader (:nodes test) 30000)
+    (when-not (wait-for-leader (:nodes test) 30000)
+      (throw (ex-info "Cluster failed to elect leader" {})))
     this)
   
   (invoke! [this test op]
     (let [timeout-ms (:operation-timeout-ms util/default-timeouts)
           entry (select-keys op [:f :key :value :old :new])
-          start-time (System/currentTimeMillis)]
+          start-time (System/currentTimeMillis)
+          url (node-url (:node this) "/command")]
+      (info "Sending" (:f op) "to" url)
       (try
         ; Send operation to our assigned node
-        (let [response (http/post (node-url (:node this) "/command")
+        (let [response (http/post url
                                   {:body (nippy/freeze {:op (:f entry)
                                                         :key (:key entry)
                                                         :value (:value entry)
@@ -86,14 +90,24 @@
                                    :headers {"Content-Type" "application/octet-stream"}
                                    :as :byte-array
                                    :socket-timeout timeout-ms
-                                   :connection-timeout 5000})
-              result (nippy/thaw (:body response))
+                                   :connection-timeout 5000
+                                   :throw-exceptions false})
               elapsed (- (System/currentTimeMillis) start-time)]
-          (merge op result {:time elapsed}))
+          (info "Response status:" (:status response) "elapsed:" elapsed "ms")
+          (if (= 200 (:status response))
+            (let [result (nippy/thaw (:body response))]
+              (info "Result:" result)
+              (merge op result {:time elapsed}))
+            (do
+              (info "HTTP error:" (:status response) "body:" (when (:body response) 
+                                                                (try (nippy/thaw (:body response))
+                                                                     (catch Exception _ (:body response)))))
+              (assoc op :type :info :error :http-error :status (:status response)))))
         (catch java.net.SocketTimeoutException e
+          (info "Operation timed out after" (- (System/currentTimeMillis) start-time) "ms")
           (assoc op :type :info :error :timeout))
         (catch Exception e
-          (error "Operation failed:" (.getMessage e))
+          (error "Operation failed:" (.getMessage e) "after" (- (System/currentTimeMillis) start-time) "ms")
           (assoc op :type :fail :error (.getMessage e))))))
   
   (teardown! [this test])

@@ -100,33 +100,82 @@
 (defn health-check
   "Health check endpoint"
   [_request]
-  (let [{:keys [raft-instance]} @node-state]
+  (let [{:keys [raft-instance node-id]} @node-state]
     {:status 200
      :headers {"Content-Type" "application/json"}
      :body (json/write-str {:status :ok
-                            :node-ready (some? raft-instance)})}))
+                            :node-ready (some? raft-instance)
+                            :node-id node-id})}))
+
+(defn forward-command-to-leader
+  "Forwards a command to the leader node"
+  [leader-id command]
+  (let [{:keys [cluster-members]} @node-state
+        leader-info (get cluster-members leader-id)]
+    (if leader-info
+      (let [{:keys [host port]} leader-info
+            url (str "http://" host ":" port "/command")
+            response (http/post url
+                               {:body (nippy/freeze command)
+                                :headers {"Content-Type" "application/octet-stream"}
+                                :as :byte-array
+                                :socket-timeout 10000
+                                :connection-timeout 1000})]
+        (nippy/thaw (:body response)))
+      {:type :fail :error :leader-not-found})))
 
 (defn handle-command-request
   "Handles command requests from Jepsen clients"
   [request]
+  (info "COMMAND: Received command request")
   (try
     (let [body (-> request :body slurp .getBytes nippy/thaw)
-          {:keys [raft-instance]} @node-state]
+          {:keys [raft-instance node-id]} @node-state]
+      (info (str "COMMAND: " node-id " - Command body: " body))
       (if raft-instance
-        (let [result-promise (promise)
-              timeout-ms 5000]
-          (raft/new-entry raft-instance body
-                          (fn [result] (deliver result-promise result))
-                          timeout-ms)
-          (let [result (deref result-promise (+ timeout-ms 1000) {:type :info :error :timeout})]
-            {:status 200
-             :headers {"Content-Type" "application/octet-stream"}
-             :body (nippy/freeze result)}))
-        {:status 503
-         :headers {"Content-Type" "application/octet-stream"}
-         :body (nippy/freeze {:type :fail :error :node-not-ready})}))
+        ;; Get current raft state to check if we're the leader
+        (let [state-promise (promise)
+              _ (raft/get-raft-state raft-instance
+                  (fn [current-state]
+                    (deliver state-promise current-state)))
+              current-state (deref state-promise 1000 nil)]
+          (info (str "COMMAND: " node-id " - Current status: " (:status current-state) 
+                     ", leader: " (:leader current-state)))
+          (if (= (:status current-state) :leader)
+            ;; We are the leader, process the command
+            (let [result-promise (promise)
+                  timeout-ms 5000]
+              (info (str "COMMAND: " node-id " - We are leader, submitting entry to Raft"))
+              (raft/new-entry raft-instance body
+                              (fn [result] 
+                                (info (str "COMMAND: " node-id " - Raft callback with result: " result))
+                                (deliver result-promise result))
+                              timeout-ms)
+              (let [result (deref result-promise (+ timeout-ms 1000) {:type :info :error :timeout})]
+                (info (str "COMMAND: " node-id " - Final result: " result))
+                {:status 200
+                 :headers {"Content-Type" "application/octet-stream"}
+                 :body (nippy/freeze result)}))
+            ;; We are not the leader, forward to leader
+            (if-let [leader (:leader current-state)]
+              (do
+                (info (str "COMMAND: " node-id " - Forwarding to leader: " leader))
+                (let [result (forward-command-to-leader leader body)]
+                  {:status 200
+                   :headers {"Content-Type" "application/octet-stream"}
+                   :body (nippy/freeze result)}))
+              (do
+                (info (str "COMMAND: " node-id " - No leader elected yet"))
+                {:status 503
+                 :headers {"Content-Type" "application/octet-stream"}
+                 :body (nippy/freeze {:type :fail :error :no-leader})}))))
+        (do
+          (info (str "COMMAND: " node-id " - No raft instance available"))
+          {:status 503
+           :headers {"Content-Type" "application/octet-stream"}
+           :body (nippy/freeze {:type :fail :error :node-not-ready})})))
     (catch Exception e
-      (error "Error handling command request:" (.getMessage e))
+      (error "COMMAND: Error handling command request:" (.getMessage e) e)
       {:status 500
        :headers {"Content-Type" "application/octet-stream"}
        :body (nippy/freeze {:type :fail :error :internal-error :message (.getMessage e)})})))
@@ -142,16 +191,26 @@
       "/test"   {:status 200
                  :headers {"Content-Type" "text/plain"}
                  :body (str "Test: " (pr-str (nippy/thaw (nippy/freeze [:request-vote {:term 1}]))))}
-      "/debug"  (let [test-msg [:request-vote {:term 1 :candidate-id "n2"}]]
-                  {:status 200
-                   :headers {"Content-Type" "text/plain"}
-                   :body (str "Original: " test-msg "\n"
-                             "Type: " (type test-msg) "\n"
-                             "First elem: " (first test-msg) "\n"
-                             "First type: " (type (first test-msg)) "\n"
-                             "After freeze/thaw: " (nippy/thaw (nippy/freeze test-msg)) "\n"
-                             "First after: " (first (nippy/thaw (nippy/freeze test-msg))) "\n"
-                             "Type after: " (type (first (nippy/thaw (nippy/freeze test-msg)))))})
+      "/debug"  (let [{:keys [raft-instance state-atom node-id]} @node-state]
+                  (if raft-instance
+                    (let [state-machine-state @state-atom
+                          result-promise (promise)
+                          _ (raft/get-raft-state raft-instance 
+                              (fn [current-state]
+                                (deliver result-promise current-state)))
+                          current-state (deref result-promise 1000 {:error "Timeout getting raft state"})]
+                      {:status 200
+                       :headers {"Content-Type" "application/json"}
+                       :body (json/write-str {:node-id node-id
+                                              :leader (:leader current-state)
+                                              :status (str (:status current-state))
+                                              :term (:term current-state)
+                                              :commit (:commit current-state)
+                                              :index (:index current-state)
+                                              :state-machine state-machine-state})})
+                    {:status 200
+                     :headers {"Content-Type" "application/json"}
+                     :body (json/write-str {:error "No raft instance"})}))
       ;; Default 404 response
       {:status 404
        :headers {"Content-Type" "application/json"}
@@ -169,13 +228,38 @@
   "Starts a distributed Raft node"
   [node-id node-host node-port cluster-members-str]
   (info "Starting distributed Raft node" node-id "on" node-host ":" node-port)
+  (info "STARTUP TEST: This should appear in logs")
   
   (let [cluster-members (parse-cluster-members cluster-members-str)
         all-nodes (vec (keys cluster-members))
         state-atom (atom {})
         
-        ;; Create state machine using util function
-        state-machine-fn (util/create-kv-state-machine state-atom)
+        ;; Create state machine adapter that handles Jepsen's :f field
+        base-state-machine (util/create-kv-state-machine state-atom)
+        state-machine-fn (fn [entry raft-state]
+                          (try
+                            (cond
+                              ;; Handle nil or empty entries
+                              (or (nil? entry) (empty? entry))
+                              (do
+                                (info "State machine received nil/empty entry")
+                                (util/ok-result))
+                              
+                              ;; Check if this is an internal Raft operation (no :f field)
+                              (nil? (:f entry))
+                              (do
+                                (debug "State machine received non-application entry:" entry)
+                                (util/ok-result))
+                              
+                              ;; Normal application operations - convert :f to :op
+                              :else
+                              (let [normalized-entry (-> entry
+                                                        (assoc :op (:f entry))
+                                                        (dissoc :f))]
+                                (base-state-machine normalized-entry raft-state)))
+                            (catch Exception e
+                              (error "State machine error processing entry:" entry "Error:" e)
+                              (util/fail-result (str "State machine error: " (.getMessage e))))))
         
         ;; Create RPC sender
         rpc-sender-fn (create-http-rpc-sender node-id cluster-members)
