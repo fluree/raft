@@ -7,7 +7,8 @@
             [clj-http.client :as http]
             [ring.adapter.jetty :as jetty]
             [fluree.raft :as raft]
-            [jepsen-raft.util :as util])
+            [jepsen-raft.util :as util]
+            [taoensso.nippy :as nippy])
   (:gen-class))
 
 ;; Global state for this node
@@ -33,12 +34,13 @@
                   url (str "http://" host ":" port "/rpc")
                   payload {:from node-id :message message}
                   response (http/post url
-                                      {:body (json/write-str payload)
-                                       :headers {"Content-Type" "application/json"}
+                                      {:body (nippy/freeze payload)
+                                       :headers {"Content-Type" "application/octet-stream"}
+                                       :as :byte-array
                                        :socket-timeout 5000
                                        :connection-timeout 5000})]
               (when callback
-                (callback (json/read-str (:body response) :key-fn keyword))))
+                (callback (nippy/thaw (:body response)))))
             (when callback
               (callback {:error :node-not-found :target target-node})))
           (catch Exception e
@@ -50,27 +52,37 @@
   "Handles incoming HTTP RPC requests"
   [request]
   (try
-    (let [body (slurp (:body request))
-          {:keys [message]} (json/read-str body :key-fn keyword)
+    (let [body (-> request :body slurp .getBytes nippy/thaw)
+          {:keys [message from]} body
           {:keys [raft-instance]} @node-state]
       (if raft-instance
         (let [result-promise (promise)
-              [op data] (if (vector? message) message [message nil])]
-          (raft/invoke-rpc* (raft/event-chan raft-instance) op data
-                            (fn [result] (deliver result-promise result)))
+              [raw-op data] (if (vector? message) message [message nil])
+              op (if (keyword? raw-op) raw-op (keyword raw-op))]
+          (info "RPC from" from "- op:" op "(type:" (type op) ") - message was:" (pr-str message))
+          (try
+            (do
+              (when-not (keyword? op)
+                (error "WARNING: op is not a keyword!" op "type:" (type op)))
+              (raft/invoke-rpc* (raft/event-chan raft-instance) op data
+                                (fn [result] 
+                                  (deliver result-promise result))))
+            (catch Exception e
+              (error "Failed to invoke RPC - op:" op "error:" e)
+              (deliver result-promise {:error :rpc-invoke-failed :message (.getMessage e)})))
           (let [result (deref result-promise 5000 {:error :timeout})]
             {:status 200
-             :headers {"Content-Type" "application/json"}
-             :body (json/write-str result)}))
+             :headers {"Content-Type" "application/octet-stream"}
+             :body (nippy/freeze result)}))
         {:status 503
-         :headers {"Content-Type" "application/json"}
-         :body (json/write-str {:error :node-not-ready})}))
+         :headers {"Content-Type" "application/octet-stream"}
+         :body (nippy/freeze {:error :node-not-ready})}))
     (catch Exception e
-      (error "Error handling RPC request:" (.getMessage e))
+      (error "Error handling RPC request:" (.getMessage e) "- exception:" e)
       {:status 500
-       :headers {"Content-Type" "application/json"}
-       :body (json/write-str {:error :internal-error
-                              :message (.getMessage e)})})))
+       :headers {"Content-Type" "application/octet-stream"}
+       :body (nippy/freeze {:error :internal-error
+                            :message (.getMessage e)})})))
 
 (defn health-check
   "Health check endpoint"
@@ -88,6 +100,9 @@
     (case (:uri request)
       "/rpc"    (handle-rpc-request request)
       "/health" (health-check request)
+      "/test"   {:status 200
+                 :headers {"Content-Type" "text/plain"}
+                 :body (str "Test: " (pr-str (nippy/thaw (nippy/freeze [:request-vote {:term 1}]))))}
       ;; Default 404 response
       {:status 404
        :headers {"Content-Type" "application/json"}
@@ -122,7 +137,7 @@
                      :state-machine-fn state-machine-fn
                      :rpc-sender-fn rpc-sender-fn
                      :leader-change-fn (fn [event]
-                                         (info node-id "leader changed:" (:new-leader event))))
+                                         (info "LEADER CHANGE -" node-id "- new leader:" (:new-leader event) "event:" event)))
         
         ;; Add snapshot functions (test stubs)
         full-raft-config (merge raft-config
