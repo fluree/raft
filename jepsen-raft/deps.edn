@@ -4,12 +4,18 @@
         com.fluree/raft {:local/root ".."}
         clj-http/clj-http {:mvn/version "3.12.3"}
         org.clojure/data.json {:mvn/version "2.4.0"}
-        com.taoensso/nippy {:mvn/version "3.2.0"}}
+        com.taoensso/nippy {:mvn/version "3.2.0"}
+        ring/ring-core {:mvn/version "1.9.6"}
+        ring/ring-jetty-adapter {:mvn/version "1.9.6"}}
  
  :aliases
  {;; Main Jepsen test (recommended)
   :jepsen {:main-opts ["-m" "jepsen-raft.simple-in-process"]
            :description "Robust in-process Jepsen test with proper timeout handling"}
+  
+  ;; Distributed test
+  :distributed {:main-opts ["-m" "jepsen-raft.distributed-test"]
+                :description "Distributed Jepsen test using Docker containers"}
   
   ;; Alternative test runners
   :run {:main-opts ["-m" "jepsen-raft.core-test"]

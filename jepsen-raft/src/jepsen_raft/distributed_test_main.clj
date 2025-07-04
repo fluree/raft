@@ -49,7 +49,8 @@
           (catch Exception e
             (error "RPC error sending to" target-node ":" (.getMessage e))
             ;; Don't call callback on network errors - let Raft handle the timeout
-            ;; Calling callback with error response causes NullPointerException in Raft))))))
+            ;; Calling callback with error response causes NullPointerException in Raft
+            ))))))
 
 (defn handle-rpc-request
   "Handles incoming HTTP RPC requests"
@@ -105,6 +106,31 @@
      :body (json/write-str {:status :ok
                             :node-ready (some? raft-instance)})}))
 
+(defn handle-command-request
+  "Handles command requests from Jepsen clients"
+  [request]
+  (try
+    (let [body (-> request :body slurp .getBytes nippy/thaw)
+          {:keys [raft-instance]} @node-state]
+      (if raft-instance
+        (let [result-promise (promise)
+              timeout-ms 5000]
+          (raft/new-entry raft-instance body
+                          (fn [result] (deliver result-promise result))
+                          timeout-ms)
+          (let [result (deref result-promise (+ timeout-ms 1000) {:type :info :error :timeout})]
+            {:status 200
+             :headers {"Content-Type" "application/octet-stream"}
+             :body (nippy/freeze result)}))
+        {:status 503
+         :headers {"Content-Type" "application/octet-stream"}
+         :body (nippy/freeze {:type :fail :error :node-not-ready})}))
+    (catch Exception e
+      (error "Error handling command request:" (.getMessage e))
+      {:status 500
+       :headers {"Content-Type" "application/octet-stream"}
+       :body (nippy/freeze {:type :fail :error :internal-error :message (.getMessage e)})})))
+
 (defn create-http-handler
   "Creates HTTP request handler"
   []
@@ -112,6 +138,7 @@
     (case (:uri request)
       "/rpc"    (handle-rpc-request request)
       "/health" (health-check request)
+      "/command" (handle-command-request request)
       "/test"   {:status 200
                  :headers {"Content-Type" "text/plain"}
                  :body (str "Test: " (pr-str (nippy/thaw (nippy/freeze [:request-vote {:term 1}]))))}
