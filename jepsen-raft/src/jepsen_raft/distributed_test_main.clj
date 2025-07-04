@@ -48,8 +48,8 @@
               (callback {:error :node-not-found :target target-node})))
           (catch Exception e
             (error "RPC error sending to" target-node ":" (.getMessage e))
-            (when callback
-              (callback {:error :rpc-failed :message (.getMessage e)}))))))))
+            ;; Don't call callback on network errors - let Raft handle the timeout
+            ;; Calling callback with error response causes NullPointerException in Raft))))))
 
 (defn handle-rpc-request
   "Handles incoming HTTP RPC requests"
