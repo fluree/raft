@@ -13,8 +13,7 @@ components for networking, state machines, and persistence.
 - **Dynamic Membership**: Add or remove servers from the cluster
 - **Pluggable Architecture**: Customize networking, state machines, and 
   storage backends
-- **Error Handling**: Includes log corruption recovery and comprehensive 
-  error handling
+- **Error Handling**: Includes log corruption recovery and error handling
 - **Monitoring**: Built-in callbacks for leadership changes and other events
 
 ## Prerequisites
@@ -33,18 +32,33 @@ components for networking, state machines, and persistence.
 {:deps {com.fluree/raft {:mvn/version "1.0.0-beta1"}}}
 ```
 
-### Leiningen
-
-```clojure
-:dependencies [[com.fluree/raft "1.0.0-beta1"]]
-```
-
-### Using Git dependency (for latest development version)
+Using Git dependency (for latest development version)
 
 ```clojure
 {:deps {fluree/raft {:git/url "https://github.com/fluree/raft"
                      :git/sha "904d915"}}} ; use latest commit SHA
 ```
+
+
+## Validation & Performance
+
+This Raft implementation has been validated with [Jepsen](https://jepsen.io/) for correctness and performance.
+
+### Latest Results (July 2025)
+
+**Consistency Validation:**
+- ✅ **Linearizability**: Zero violations across 27,725 operations in 5-minute stress test
+- ✅ **High Concurrency**: [Up to 846 ops/sec (7-node cluster, 150 clients)](jepsen-raft/performance-results.md)
+- ✅ **Jepsen Result**: "Valid" - [Jepsen test results](jepsen-raft/test-results/5-minute-consistency-test/README.md)
+
+### Test Suite
+
+**Three Test Environments:**
+
+[Complete Test Guide](jepsen-raft/README.md) - Setup, configuration, and test scenarios
+1. **[Local Net.Async Test](jepsen-raft/README.md#1-local-netasync-test-testclj)** - Fast development iteration
+2. **[Docker Network Failure Test](jepsen-raft/README.md#2-dockerized-test-with-network-failures-test_dockerclj)** - Production simulation with network partitions
+3. **[Performance Stress Test](jepsen-raft/README.md#3-performance-stress-test-test_performanceclj)** - Capacity planning and breaking point analysis
 
 ## Quick Start
 
