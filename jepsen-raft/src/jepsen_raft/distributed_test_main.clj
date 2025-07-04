@@ -29,6 +29,9 @@
                          ", expected 3 or 5"))))]
       (go
         (try
+          (debug "Sending RPC to" target-node "- message:" message "type:" (type message))
+          (when (vector? message)
+            (debug "Message vector - first:" (first message) "type:" (type (first message))))
           (if-let [target-info (get cluster-members target-node)]
             (let [{:keys [host port]} target-info
                   url (str "http://" host ":" port "/rpc")
@@ -55,17 +58,26 @@
     (let [body (-> request :body slurp .getBytes nippy/thaw)
           {:keys [message from]} body
           {:keys [raft-instance]} @node-state]
+      (info "RPC received - raw body:" body)
+      (info "Message type:" (type message) "- content:" message)
       (if raft-instance
         (let [result-promise (promise)
-              [raw-op data] (if (vector? message) message [message nil])
-              op (if (keyword? raw-op) raw-op (keyword raw-op))]
-          (info "RPC from" from "- op:" op "(type:" (type op) ") - message was:" (pr-str message))
+              [raw-op data] (if (vector? message) 
+                              [(first message) (second message)]
+                              [message nil])
+              _ (info "Extracted raw-op:" raw-op "type:" (type raw-op))
+              op (cond
+                   (keyword? raw-op) raw-op
+                   (string? raw-op) (keyword raw-op)
+                   (symbol? raw-op) (keyword (name raw-op))
+                   :else (do (error "Unknown op type:" (type raw-op) "value:" raw-op)
+                            (keyword (str raw-op))))]
+          (info "Final op:" op "type:" (type op) "- will invoke RPC")
           (try
-            (do
-              (when-not (keyword? op)
-                (error "WARNING: op is not a keyword!" op "type:" (type op)))
-              (raft/invoke-rpc* (raft/event-chan raft-instance) op data
+            (let [event-chan (raft/event-chan raft-instance)]
+              (raft/invoke-rpc* event-chan op data
                                 (fn [result] 
+                                  (info "RPC result for" op "-" result)
                                   (deliver result-promise result))))
             (catch Exception e
               (error "Failed to invoke RPC - op:" op "error:" e)
@@ -103,6 +115,16 @@
       "/test"   {:status 200
                  :headers {"Content-Type" "text/plain"}
                  :body (str "Test: " (pr-str (nippy/thaw (nippy/freeze [:request-vote {:term 1}]))))}
+      "/debug"  (let [test-msg [:request-vote {:term 1 :candidate-id "n2"}]]
+                  {:status 200
+                   :headers {"Content-Type" "text/plain"}
+                   :body (str "Original: " test-msg "\n"
+                             "Type: " (type test-msg) "\n"
+                             "First elem: " (first test-msg) "\n"
+                             "First type: " (type (first test-msg)) "\n"
+                             "After freeze/thaw: " (nippy/thaw (nippy/freeze test-msg)) "\n"
+                             "First after: " (first (nippy/thaw (nippy/freeze test-msg))) "\n"
+                             "Type after: " (type (first (nippy/thaw (nippy/freeze test-msg)))))})
       ;; Default 404 response
       {:status 404
        :headers {"Content-Type" "application/json"}
