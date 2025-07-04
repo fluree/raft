@@ -6,91 +6,86 @@
             [jepsen.util :as util]
             [clojure.string :as str]))
 
-(def raft-dir "/opt/fluree-raft")
-(def log-dir (str raft-dir "/logs"))
-(def data-dir (str raft-dir "/data"))
+(def fluree-dir "/opt/fluree-server")
+(def log-dir (str fluree-dir "/logs"))
+(def data-dir (str fluree-dir "/data"))
 
-(defn node-id
-  "Generate a node ID from the node name"
+(defn node-multiaddr
+  "Generate multi-address for a node"
   [node]
-  (str "node-" (last (str/split node #"-"))))
+  ;; In Docker, nodes are named n1, n2, etc. and have IPs 10.100.0.11, 10.100.0.12, etc.
+  (let [node-num (Integer/parseInt (subs node 1))]
+    (str "/ip4/10.100.0." (+ 10 node-num) "/tcp/62071/alias/" node)))
 
-(defn install!
-  "Install Fluree Raft on a node"
-  [node version]
-  (info "Installing Fluree Raft on" node)
-  (c/su
-    (c/exec :mkdir :-p raft-dir log-dir data-dir)
-    ;; In a real test, you'd download/copy the JAR here
-    ;; For now, we'll assume it's available via the local Maven repo
-    (c/exec :echo "Fluree Raft installed")))
+(defn all-multiaddrs
+  "Get all node multi-addresses for the test"
+  [test]
+  (mapv node-multiaddr (:nodes test)))
+
+(defn wait-for-fluree
+  "Wait for Fluree to start up and be responsive"
+  [node]
+  (util/await-fn
+    (fn []
+      (try
+        (c/exec :curl :-f (str "http://localhost:8090/health"))
+        true
+        (catch Exception e false)))
+    30 ; timeout in seconds
+    1)) ; retry interval
 
 (defn configure!
-  "Generate Raft configuration for a node"
+  "Update Fluree configuration for the test"
   [node test]
-  (let [nodes (:nodes test)
-        node-id (node-id node)]
-    (c/su
-      (c/exec :echo
-              (pr-str {:servers (mapv node-id nodes)
-                       :this-server node-id
-                       :log-directory log-dir
-                       :data-directory data-dir
-                       :port 7000})
-              :> (str raft-dir "/config.edn")))))
+  (info "Configuring Fluree on" node)
+  ;; Configuration is handled by environment variables in Docker
+  ;; Just ensure the service is restarted if needed
+  (c/su
+    (c/exec :supervisorctl :restart :fluree)))
 
 (defn start!
-  "Start Raft on a node"
+  "Start Fluree service"
   [node test]
-  (info "Starting Raft on" node)
+  (info "Starting Fluree on" node)
   (c/su
-    (c/exec :start-stop-daemon
-            :--start
-            :--background
-            :--make-pidfile
-            :--pidfile (str raft-dir "/raft.pid")
-            :--chdir raft-dir
-            :--exec "/usr/bin/java"
-            :--
-            "-Xmx1G"
-            "-cp" "raft.jar"
-            "jepsen_raft.server"
-            raft-dir)))
+    (c/exec :supervisorctl :start :fluree)
+    (wait-for-fluree node)
+    (info "Fluree started on" node)))
 
 (defn stop!
-  "Stop Raft on a node"
+  "Stop Fluree service"
   [node]
-  (info "Stopping Raft on" node)
+  (info "Stopping Fluree on" node)
   (c/su
-    (util/meh (c/exec :start-stop-daemon
-                      :--stop
-                      :--pidfile (str raft-dir "/raft.pid")
-                      :--retry "TERM/30/KILL/5"))))
+    (c/exec :supervisorctl :stop :fluree)))
 
 (defn wipe!
-  "Remove all Raft data from a node"
+  "Wipe all Fluree data"
   [node]
-  (info "Wiping Raft data on" node)
+  (info "Wiping Fluree data on" node)
   (c/su
-    (c/exec :rm :-rf log-dir data-dir)))
+    (stop! node)
+    (c/exec :rm :-rf (str data-dir "/*"))
+    (c/exec :rm :-rf (str log-dir "/*"))))
 
-(defrecord DB [version]
+(defrecord FlureeDB [version]
   db/DB
-  (setup! [this test node]
-    (install! node version)
+  (setup! [_ test node]
+    ;; In Docker setup, Fluree is already installed
+    ;; Just configure and start it
     (configure! node test)
     (start! node test))
   
-  (teardown! [this test node]
-    (stop! node)
+  (teardown! [_ test node]
     (wipe! node))
   
   db/LogFiles
-  (log-files [this test node]
-    [(str raft-dir "/raft.log")
-     (str log-dir "/*.log")]))
+  (log-files [_ test node]
+    [(str log-dir "/fluree.log")
+     (str log-dir "/fluree_err.log")
+     (str data-dir "/raft-log/raft.log")]))
 
 (defn db
-  "Create a new Raft DB instance"
+  "Create a Fluree DB instance"
   [version]
-  (DB. version))
+  (FlureeDB. version))

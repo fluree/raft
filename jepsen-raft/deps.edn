@@ -1,7 +1,10 @@
 {:paths ["src" "resources"]
  :deps {org.clojure/clojure {:mvn/version "1.11.1"}
         jepsen/jepsen {:mvn/version "0.3.5"}
-        com.fluree/raft {:local/root ".."}}
+        com.fluree/raft {:local/root ".."}
+        clj-http/clj-http {:mvn/version "3.12.3"}
+        org.clojure/data.json {:mvn/version "2.4.0"}
+        com.taoensso/nippy {:mvn/version "3.2.0"}}
  
  :aliases
  {;; Main Jepsen test (recommended)
@@ -9,10 +12,8 @@
            :description "Robust in-process Jepsen test with proper timeout handling"}
   
   ;; Alternative test runners
-  :run {:main-opts ["-m" "jepsen.main"
-                    "--concurrency" "10"
-                    "--test" "jepsen-raft.core-test"]
-        :description "Full distributed Jepsen test (NOT YET IMPLEMENTED)"}
+  :run {:main-opts ["-m" "jepsen-raft.core-test"]
+        :description "Full distributed Jepsen test (requires Docker setup)"}
   
   ;; Development tools
   :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}

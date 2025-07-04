@@ -1,0 +1,18 @@
+# Simple Dockerfile for running Jepsen tests
+FROM clojure:temurin-21-tools-deps-alpine
+
+# Install dependencies
+RUN apk add --no-cache bash curl
+
+# Set working directory
+WORKDIR /jepsen-raft
+
+# Copy project files
+COPY .. /jepsen-raft/
+COPY ../.. /raft/
+
+# Pre-download dependencies
+RUN clojure -P -M:jepsen
+
+# Run the test
+CMD ["clojure", "-M:jepsen", "test", "--time-limit", "30"]

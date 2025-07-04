@@ -13,8 +13,8 @@ failure scenarios using an in-process testing approach.
   on macOS
 
 ### Optional Dependencies
-- Docker or LXC containers for distributed testing
-- SSH access to test nodes (for distributed tests only)
+- Docker (for distributed testing)
+- Docker Compose (for orchestrating test environment)
 
 ## Quick Start
 
@@ -41,11 +41,19 @@ jepsen-raft/
 ├── deps.edn                 # Dependencies and aliases
 ├── src/jepsen_raft/
 │   ├── simple_in_process.clj # Main in-process test (recommended)
-│   ├── core_test.clj        # Distributed test stub (not yet implemented)
-│   ├── db.clj               # Database setup stub for distributed tests
-│   ├── client.clj           # Client operations stub for distributed tests
+│   ├── core_test.clj        # Distributed test for Docker environment
+│   ├── db.clj               # Database setup for distributed tests
+│   ├── client.clj           # HTTP API client for distributed tests
 │   ├── server.clj           # Embedded Raft server
 │   └── util.clj             # Utility functions
+├── docker/
+│   ├── node/
+│   │   ├── Dockerfile       # Fluree test node image
+│   │   ├── supervisord.conf # Process management config
+│   │   └── start-node.sh    # Node startup script
+│   ├── control/
+│   │   └── Dockerfile       # Jepsen control node image
+│   └── docker-compose.yml   # Complete test environment
 └── store/                   # Test results and artifacts
     ├── latest               # Symlink to most recent test
     ├── current              # Current running test (if any)
@@ -63,11 +71,29 @@ make test
 TIME=60 make test
 ```
 
-### Distributed Test (Future Work)
+### Distributed Test (Docker)
+
+The distributed test runs Fluree across multiple Docker containers to test real network conditions and failure scenarios.
+
+#### Setup
 ```bash
-# Full distributed Jepsen test (NOT YET IMPLEMENTED)
-# This will eventually support testing across multiple Docker/LXC containers
-make run
+# Build Docker images
+cd docker
+docker-compose build
+
+# Start the test environment (5 nodes + control node)
+docker-compose up -d
+
+# Run distributed test from control node
+docker-compose exec control bash
+cd /jepsen-raft
+clojure -M:run test --nodes n1,n2,n3,n4,n5 --time-limit 60
+```
+
+#### Teardown
+```bash
+# Stop and remove all containers
+docker-compose down -v
 ```
 
 ### Development Tools
@@ -215,6 +241,31 @@ Test parameters are defined in `util.clj` constants:
 (test/-main "test" "--time-limit" "5")
 ```
 
+## Distributed Testing Architecture
+
+### Docker Environment
+
+The distributed test environment consists of:
+- **5 test nodes** (n1-n5): Each runs Fluree with unique multi-address configuration
+- **1 control node**: Runs Jepsen tests and coordinates the cluster
+- **Isolated network**: Custom bridge network (10.100.0.0/24) for predictable IPs
+
+### Node Configuration
+
+Each node is configured with:
+- **Multi-address format**: `/ip4/<IP>/tcp/62071/alias/<node-name>`
+- **HTTP API**: Port 8090 for client operations
+- **Raft communication**: Port 62071-62075
+- **Supervisor**: Process management for start/stop/restart operations
+
+### Test Operations
+
+The distributed test validates:
+- **Leader election** across network partitions
+- **Data consistency** during node failures
+- **Split-brain scenarios** with network partitions
+- **Recovery behavior** when nodes rejoin
+
 ## TODO List
 
 ### High Priority
@@ -224,7 +275,7 @@ Test parameters are defined in `util.clj` constants:
 - [ ] Add more sophisticated failure modes (Byzantine failures)
 
 ### Medium Priority  
-- [ ] Create Docker-based distributed test setup
+- [x] Create Docker-based distributed test setup
 - [ ] Add performance benchmarking with specific workloads
 - [ ] Implement multi-key transactions testing
 - [ ] Add snapshot and log compaction stress tests

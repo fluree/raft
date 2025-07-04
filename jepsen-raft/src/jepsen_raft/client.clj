@@ -1,75 +1,93 @@
 (ns jepsen-raft.client
-  "Client protocol for interacting with Fluree Raft"
+  "Client protocol for interacting with Fluree Raft via HTTP API"
   (:require [jepsen.client :as client]
+            [clojure.tools.logging :refer [info debug error]]
+            [clj-http.client :as http]
+            [clojure.data.json :as json]
             [slingshot.slingshot :refer [try+]]))
 
-(defprotocol RaftClient
-  "Protocol for Raft client operations"
-  (write! [client k v] "Write a key-value pair")
-  (read! [client k] "Read a value by key")
-  (cas! [client k old-v new-v] "Compare and swap")
-  (delete! [client k] "Delete a key"))
-
-(defn connect
-  "Connect to a Raft node. Returns a client connection."
+(defn node-url
+  "Get the HTTP URL for a node"
   [node]
-  ;; In a real implementation, this would establish a network connection
-  ;; For now, we'll return a map with connection info
-  {:node node
-   :port 7000
-   :connected? true})
+  (str "http://" node ":8090"))
 
-(defn disconnect!
-  "Disconnect from a Raft node"
-  [conn]
-  (assoc conn :connected? false))
+(defn api-request
+  "Make an API request to Fluree"
+  [node endpoint method body]
+  (let [url (str (node-url node) endpoint)
+        request-opts (cond-> {:method method
+                              :content-type :json
+                              :accept :json
+                              :throw-exceptions false
+                              :socket-timeout 5000
+                              :connection-timeout 5000}
+                       body (assoc :body (json/write-str body)))]
+    (try+
+      (let [response (http/request (merge request-opts {:url url}))
+            status (:status response)]
+        (cond
+          (= status 200) {:ok true :value (when-let [body (:body response)]
+                                             (json/read-str body :key-fn keyword))}
+          (= status 404) {:ok true :value nil} ; Key not found
+          (= status 409) {:ok false :error :conflict} ; CAS conflict
+          (>= status 500) {:ok false :error :server-error}
+          :else {:ok false :error (str "Unexpected status: " status)}))
+      (catch [:status 503] _
+        {:ok false :error :unavailable})
+      (catch java.net.SocketTimeoutException _
+        {:ok false :error :timeout})
+      (catch Exception e
+        {:ok false :error (str "Request failed: " (.getMessage e))}))))
 
-(defn invoke-operation!
-  "Send an operation to the Raft cluster"
-  [conn op]
-  ;; This is a placeholder - in reality, you'd send the operation
-  ;; over the network to the Raft node
-  (try+
-    (case (:f op)
-      :read {:type :ok
-             :value (get (:value op) (:k op))}
-      :write {:type :ok}
-      :cas (if (= (get (:value op) (:k op)) (:old-v op))
-             {:type :ok}
-             {:type :fail})
-      :delete {:type :ok})
-    (catch [:type :network-error] _
-      {:type :fail
-       :error :network-error})
-    (catch Exception _
-      {:type :fail
-       :error :unknown})))
+(defn kv-key-url
+  "Get the URL for a key-value operation"
+  [key]
+  (str "/kv/" (name key)))
 
-(defrecord Client [conn]
+(defrecord FlureeClient []
   client/Client
-  (open! [this _test node]
-    (assoc this :conn (connect node)))
+  (open! [this test node]
+    (assoc this :node node))
   
-  (setup! [_this _test])
+  (setup! [_ _])
   
-  (invoke! [_this _test op]
-    (case (:f op)
-      :read (let [result (invoke-operation! conn op)]
-              (assoc op :type (:type result)
-                     :value (:value result)))
-      :write (let [result (invoke-operation! conn op)]
-               (assoc op :type (:type result)))
-      :cas (let [result (invoke-operation! conn op)]
-             (assoc op :type (:type result)))
-      :delete (let [result (invoke-operation! conn op)]
-                (assoc op :type (:type result)))))
+  (invoke! [this test op]
+    (let [node (:node this)
+          {:keys [f key value old new]} op]
+      (case f
+        :read
+        (let [result (api-request node (kv-key-url key) :get nil)]
+          (if (:ok result)
+            (assoc op :type :ok :value (:value result))
+            (assoc op :type :fail :error (:error result))))
+        
+        :write
+        (let [result (api-request node (kv-key-url key) :put {:value value})]
+          (if (:ok result)
+            (assoc op :type :ok)
+            (assoc op :type :fail :error (:error result))))
+        
+        :cas
+        (let [result (api-request node (kv-key-url key) :post {:old old :new new})]
+          (if (:ok result)
+            (assoc op :type :ok)
+            (if (= (:error result) :conflict)
+              (assoc op :type :fail)
+              (assoc op :type :info :error (:error result)))))
+        
+        :delete
+        (let [result (api-request node (kv-key-url key) :delete nil)]
+          (if (:ok result)
+            (assoc op :type :ok)
+            (assoc op :type :fail :error (:error result))))
+        
+        (assoc op :type :fail :error (str "Unknown operation: " f)))))
   
-  (teardown! [_this _test])
+  (teardown! [_ _])
   
-  (close! [_this _test]
-    (disconnect! conn)))
+  (close! [_ _]))
 
 (defn client
-  "Create a new Raft client"
+  "Create a new Fluree client"
   []
-  (Client. nil))
+  (FlureeClient.))
