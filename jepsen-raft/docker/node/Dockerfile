@@ -29,14 +29,15 @@ COPY --chown=fluree:fluree ./raft/jepsen-raft /opt/fluree-server/jepsen-raft/
 # Set working directory
 WORKDIR /opt/fluree-server/jepsen-raft
 
-# Pre-download dependencies to speed up startup
-RUN clojure -P && \
+# Use Docker-specific deps file and pre-download dependencies
+RUN cp docker-deps.edn deps.edn && \
+    clojure -P && \
     chown -R fluree:fluree /opt/fluree-server/jepsen-raft/.cpcache
 
 # Copy startup script and supervisor config  
-COPY --chown=fluree:fluree jepsen-raft/docker/node/start-node.sh /opt/fluree-server/
+COPY --chown=fluree:fluree raft/jepsen-raft/docker/node/start-node.sh /opt/fluree-server/
 RUN chmod +x /opt/fluree-server/start-node.sh
-COPY jepsen-raft/docker/node/supervisord.conf /etc/supervisord.conf
+COPY raft/jepsen-raft/docker/node/supervisord.conf /etc/supervisord.conf
 
 # Expose ports
 # 22 - SSH for Jepsen

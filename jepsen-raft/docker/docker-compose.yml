@@ -29,8 +29,6 @@ services:
       - n1
       - n2
       - n3
-      - n4
-      - n5
 
   n1:
     container_name: jepsen-n1
@@ -38,15 +36,15 @@ services:
     image: jepsen-node
     build:
       context: ../../..
-      dockerfile: jepsen-raft/docker/node/Dockerfile
+      dockerfile: raft/jepsen-raft/docker/node/Dockerfile
     networks:
       jepsen:
         ipv4_address: 10.100.0.11
     environment:
       - NODE_ID=n1
-      - NODE_HOST=10.100.0.11
+      - NODE_HOST=0.0.0.0
       - NODE_PORT=7001
-      - CLUSTER_MEMBERS=10.100.0.12:7001,10.100.0.13:7001,10.100.0.14:7001,10.100.0.15:7001
+      - CLUSTER_MEMBERS=n1:10.100.0.11:7001,n2:10.100.0.12:7001,n3:10.100.0.13:7001
     volumes:
       - n1-data:/opt/fluree-server/data
       - n1-logs:/opt/fluree-server/logs
@@ -57,15 +55,15 @@ services:
     image: jepsen-node
     build:
       context: ../../..
-      dockerfile: jepsen-raft/docker/node/Dockerfile
+      dockerfile: raft/jepsen-raft/docker/node/Dockerfile
     networks:
       jepsen:
         ipv4_address: 10.100.0.12
     environment:
       - NODE_ID=n2
-      - NODE_HOST=10.100.0.12
+      - NODE_HOST=0.0.0.0
       - NODE_PORT=7001
-      - CLUSTER_MEMBERS=10.100.0.11:7001,10.100.0.13:7001,10.100.0.14:7001,10.100.0.15:7001
+      - CLUSTER_MEMBERS=n1:10.100.0.11:7001,n2:10.100.0.12:7001,n3:10.100.0.13:7001
     volumes:
       - n2-data:/opt/fluree-server/data
       - n2-logs:/opt/fluree-server/logs
@@ -76,65 +74,23 @@ services:
     image: jepsen-node
     build:
       context: ../../..
-      dockerfile: jepsen-raft/docker/node/Dockerfile
+      dockerfile: raft/jepsen-raft/docker/node/Dockerfile
     networks:
       jepsen:
         ipv4_address: 10.100.0.13
     environment:
       - NODE_ID=n3
-      - NODE_HOST=10.100.0.13
+      - NODE_HOST=0.0.0.0
       - NODE_PORT=7001
-      - CLUSTER_MEMBERS=10.100.0.11:7001,10.100.0.12:7001,10.100.0.14:7001,10.100.0.15:7001
+      - CLUSTER_MEMBERS=n1:10.100.0.11:7001,n2:10.100.0.12:7001,n3:10.100.0.13:7001
     volumes:
       - n3-data:/opt/fluree-server/data
       - n3-logs:/opt/fluree-server/logs
-
-  n4:
-    container_name: jepsen-n4
-    hostname: n4
-    image: jepsen-node
-    build:
-      context: ../../..
-      dockerfile: jepsen-raft/docker/node/Dockerfile
-    networks:
-      jepsen:
-        ipv4_address: 10.100.0.14
-    environment:
-      - NODE_ID=n4
-      - NODE_HOST=10.100.0.14
-      - NODE_PORT=7001
-      - CLUSTER_MEMBERS=10.100.0.11:7001,10.100.0.12:7001,10.100.0.13:7001,10.100.0.15:7001
-    volumes:
-      - n4-data:/opt/fluree-server/data
-      - n4-logs:/opt/fluree-server/logs
-
-  n5:
-    container_name: jepsen-n5
-    hostname: n5
-    image: jepsen-node
-    build:
-      context: ../../..
-      dockerfile: jepsen-raft/docker/node/Dockerfile
-    networks:
-      jepsen:
-        ipv4_address: 10.100.0.15
-    environment:
-      - NODE_ID=n5
-      - NODE_HOST=10.100.0.15
-      - NODE_PORT=7001
-      - CLUSTER_MEMBERS=10.100.0.11:7001,10.100.0.12:7001,10.100.0.13:7001,10.100.0.14:7001
-    volumes:
-      - n5-data:/opt/fluree-server/data
-      - n5-logs:/opt/fluree-server/logs
 
 volumes:
   n1-data:
   n2-data:
   n3-data:
-  n4-data:
-  n5-data:
   n1-logs:
   n2-logs:
   n3-logs:
-  n4-logs:
-  n5-logs:
