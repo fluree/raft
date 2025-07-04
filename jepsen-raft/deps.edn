@@ -1,0 +1,20 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        jepsen/jepsen {:mvn/version "0.3.5"}
+        com.fluree/raft {:local/root ".."}}
+ 
+ :aliases
+ {;; Main Jepsen test (recommended)
+  :jepsen {:main-opts ["-m" "jepsen-raft.simple-in-process"]
+           :description "Robust in-process Jepsen test with proper timeout handling"}
+  
+  ;; Alternative test runners
+  :run {:main-opts ["-m" "jepsen.main"
+                    "--concurrency" "10"
+                    "--test" "jepsen-raft.core-test"]
+        :description "Full distributed Jepsen test (NOT YET IMPLEMENTED)"}
+  
+  ;; Development tools
+  :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src"]
+         :description "Lint source code with clj-kondo"}}}
