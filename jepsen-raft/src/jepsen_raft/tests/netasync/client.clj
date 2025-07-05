@@ -25,31 +25,34 @@
            redirects   0]
       (if (>= redirects max-redirects)
         (throw+ {:type :too-many-redirects})
-        (try+
-          (let [response (http/post current-url
-                                    {:body            (json/write-str command)
-                                     :content-type    :json
-                                     :accept          :json
-                                     :as              :json
-                                     :socket-timeout  5000
-                                     :conn-timeout    5000
-                                     :throw-exceptions false})]
-            (case (:status response)
-              200
-              (let [body (:body response)]
-                (if (= :redirect (:type body))
-                  ;; Follow redirect to leader
-                  (if-let [leader-url (:leader body)]
-                    (recur leader-url (inc redirects))
-                    (throw+ {:type :no-leader}))
-                  ;; Return result
-                  body))
-              
-              (throw+ {:type :http-error :status (:status response)})))
-          (catch java.net.ConnectException e
-            (throw+ {:type :connection-refused}))
-          (catch java.net.SocketTimeoutException e
-            (throw+ {:type :timeout})))))))
+        (let [result (try+
+                       (let [response (http/post current-url
+                                                 {:body            (json/write-str command)
+                                                  :content-type    :json
+                                                  :accept          :json
+                                                  :as              :json
+                                                  :socket-timeout  5000
+                                                  :conn-timeout    5000
+                                                  :throw-exceptions false})]
+                         (case (:status response)
+                           200
+                           (let [body (:body response)]
+                             (if (= :redirect (:type body))
+                               ;; Follow redirect to leader
+                               (if-let [leader-url (:leader body)]
+                                 {:redirect leader-url}
+                                 (throw+ {:type :no-leader}))
+                               ;; Return result
+                               {:result body}))
+                           
+                           (throw+ {:type :http-error :status (:status response)})))
+                       (catch java.net.ConnectException e
+                         (throw+ {:type :connection-refused}))
+                       (catch java.net.SocketTimeoutException e
+                         (throw+ {:type :timeout})))]
+          (if (:redirect result)
+            (recur (:redirect result) (inc redirects))
+            (:result result)))))))
 
 (defrecord NetAsyncClient [node]
   client/Client

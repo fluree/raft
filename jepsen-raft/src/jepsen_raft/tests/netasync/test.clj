@@ -14,6 +14,7 @@
                     [tests :as tests]
                     [os :as os]
                     [util :as util :refer [timeout]]]
+            [jepsen.checker.timeline :as timeline]
             [jepsen.control.util :as cu]
             [jepsen-raft.util :as rutil]
             [jepsen-raft.tests.netasync.db :as netasync-db]
@@ -21,6 +22,19 @@
             [slingshot.slingshot :refer [throw+ try+]]
             [knossos.model :as model])
   (:import (knossos.model Model)))
+
+(defn ^:private read-op [_ _] 
+  {:type :invoke, :f :read, :key (rand-nth [:x :y :z])})
+
+(defn ^:private write-op [_ _] 
+  {:type :invoke, :f :write, :key (rand-nth [:x :y :z]), :value (rand-int 100)})
+
+(defn ^:private cas-op [_ _] 
+  {:type :invoke, :f :cas, :key (rand-nth [:x :y :z]), 
+   :value [(rand-int 100) (rand-int 100)]})
+
+(defn ^:private delete-op [_ _]
+  {:type :invoke, :f :delete, :key (rand-nth [:x :y :z])})
 
 (defn raft-test
   "Given options from the CLI, constructs a test map for net.async-based
@@ -39,13 +53,13 @@
             :model     (model/cas-register nil)
             :checker   (checker/compose
                          {:perf     (checker/perf)
-                          :timeline (checker/timeline)
+                          :timeline (timeline/html)
                           :linear   (checker/linearizable
                                       {:model (model/cas-register nil)})})
-            :generator (->> (gen/mix [rutil/read-op
-                                      rutil/write-op
-                                      rutil/cas-op
-                                      rutil/delete-op])
+            :generator (->> (gen/mix [read-op
+                                      write-op
+                                      cas-op
+                                      delete-op])
                             (gen/stagger 1/50)
                             (gen/nemesis nil)
                             (gen/time-limit (:time-limit opts)))})))

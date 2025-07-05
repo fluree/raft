@@ -571,7 +571,9 @@
       (case (:uri request)
         "/command" (handle-command-request raft-instance request port-map)
         "/debug"   (handle-debug-request raft-instance server-id state-atom)
-        "/health"  (response/response {:status "ok"})
+        "/health"  (let [current-state (get-current-raft-state raft-instance 1000)]
+                     (response/response {:status "ok" 
+                                         :node-ready (not (nil? (:leader current-state)))}))
         (response/not-found "Not found"))
       
       (catch Exception e

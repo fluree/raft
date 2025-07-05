@@ -5,8 +5,20 @@ help: ## Show this help message
 .DEFAULT_GOAL := help
 
 .PHONY: test
-test: ## Run robust in-process Jepsen test (recommended)
-	clojure -M:jepsen test --time-limit $${TIME:-10}
+test: ## Run net.async TCP-based test (default)
+	clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3
+
+.PHONY: netasync
+netasync: ## Run net.async TCP-based test
+	clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3
+
+.PHONY: distributed
+distributed: ## Run HTTP-based distributed test
+	clojure -M:distributed test distributed --time-limit $${TIME:-10} --concurrency 1 --no-ssh --nodes n1,n2,n3
+
+.PHONY: performance
+performance: ## Run performance stress test
+	clojure -M:performance escalating
 
 .PHONY: docker-build
 docker-build: ## Build Docker images for distributed testing

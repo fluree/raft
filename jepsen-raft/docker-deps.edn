@@ -10,8 +10,8 @@
  
  :aliases
  {;; Main Jepsen test (recommended)
-  :jepsen {:main-opts ["-m" "jepsen-raft.tests.simple.in-process"]
-           :description "Robust in-process Jepsen test with proper timeout handling"}
+  :jepsen {:main-opts ["-m" "jepsen-raft.tests.netasync.test"]
+           :description "Net.async-based distributed test like Fluree Server"}
   
   
   ;; Development tools

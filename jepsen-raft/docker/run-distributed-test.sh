@@ -1,5 +1,5 @@
 #!/bin/bash
-# Simple script to run distributed test using Docker
+# Script to run distributed test using Docker
 
 # Build the images
 echo "Building Docker images..."

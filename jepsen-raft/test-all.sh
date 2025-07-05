@@ -14,10 +14,9 @@ else
 fi
 echo
 
-# Test 2: Simple in-process test
-echo "=== Testing simple in-process test ==="
-echo "Note: Stop Docker containers first if running"
-echo "Run with: clojure -M:jepsen test simple --time-limit 5 --concurrency 3"
+# Test 2: Net.async test (default)
+echo "=== Testing net.async test (default) ==="
+echo "Run with: clojure -M:netasync test netasync --time-limit 10 --concurrency 1 --nodes n1,n2,n3"
 echo
 
 # Test 3: Performance test
@@ -28,5 +27,5 @@ echo
 
 echo "All test configurations:"
 echo "- Distributed test: tests/distributed/test.clj"
-echo "- Simple test: tests/simple/in_process.clj"  
+echo "- Net.async test: tests/netasync/test.clj (default)"
 echo "- Performance test: tests/performance/test.clj"
