@@ -10,19 +10,16 @@
  
  :aliases
  {;; Main Jepsen test (recommended)
-  :jepsen {:main-opts ["-m" "jepsen-raft.simple-in-process"]
+  :jepsen {:main-opts ["-m" "jepsen-raft.tests.simple.in-process"]
            :description "Robust in-process Jepsen test with proper timeout handling"}
   
   ;; Distributed test
-  :distributed {:main-opts ["-m" "jepsen-raft.distributed-test"]
+  :distributed {:main-opts ["-m" "jepsen-raft.tests.distributed.test"]
                 :description "Distributed Jepsen test using Docker containers"}
   
-  ;; Alternative test runners
-  :run {:main-opts ["-m" "jepsen-raft.core-test"]
-        :description "Full distributed Jepsen test (requires Docker setup)"}
   
   ;; Performance testing
-  :performance {:main-opts ["-m" "jepsen-raft.performance-test"]
+  :performance {:main-opts ["-m" "jepsen-raft.tests.performance.test"]
                 :description "Run performance stress tests against distributed cluster"}
   
   ;; Development tools

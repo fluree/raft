@@ -1,4 +1,4 @@
-(ns jepsen-raft.distributed-test
+(ns jepsen-raft.tests.distributed.test
   "Distributed Jepsen test using Docker containers with real network communication"
   (:require [clojure.set]
             [clojure.tools.logging :as log]

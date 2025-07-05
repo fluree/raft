@@ -18,7 +18,7 @@ echo "Starting Raft node $NODE_ID on $NODE_HOST:$NODE_PORT"
 echo "Cluster members: $CLUSTER_MEMBERS"
 
 # Run the distributed node
-exec clojure -M -m jepsen-raft.distributed-test-main \
+exec clojure -M -m jepsen-raft.tests.distributed.test-main \
     $NODE_ID \
     $NODE_HOST \
     $NODE_PORT \

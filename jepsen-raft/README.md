@@ -48,10 +48,16 @@ jepsen-raft/
 ├── README.md                # This documentation
 ├── deps.edn                 # Dependencies and aliases
 ├── src/jepsen_raft/
-│   ├── simple_in_process.clj    # In-process test (fast, with checker issues)
-│   ├── distributed_test.clj     # Distributed test (recommended)
-│   ├── distributed_test_main.clj # Docker node implementation
-│   ├── performance_test.clj     # Performance stress test and load testing
+│   ├── tests/
+│   │   ├── distributed/         # Docker-based distributed test
+│   │   │   ├── test.clj         # Main distributed test runner
+│   │   │   ├── test_main.clj    # Docker node implementation
+│   │   │   ├── client.clj       # Distributed client implementation
+│   │   │   └── db.clj           # Distributed database setup
+│   │   ├── simple/              # Simple in-memory test
+│   │   │   └── in_process.clj   # In-process test (fast, with checker issues)
+│   │   └── performance/         # Load and stress testing
+│   │       └── test.clj         # Performance stress test
 │   └── util.clj                 # Shared utilities and state machines
 ├── docker/
 │   ├── node/
@@ -406,10 +412,10 @@ Test parameters are defined in `util.clj` constants:
 ### REPL Development
 ```clojure
 ;; Load the distributed test namespace
-(require '[jepsen-raft.distributed-test :as test])
+(require '[jepsen-raft.tests.distributed.test :as test])
 
 ;; Load the in-process test namespace  
-(require '[jepsen-raft.simple-in-process :as simple])
+(require '[jepsen-raft.tests.simple.in-process :as simple])
 
 ;; Run a quick distributed test (recommended)
 (test/-main "test" "distributed" "--time-limit" "5")

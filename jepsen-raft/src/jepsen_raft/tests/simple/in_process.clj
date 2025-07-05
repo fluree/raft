@@ -1,4 +1,4 @@
-(ns jepsen-raft.simple-in-process
+(ns jepsen-raft.tests.simple.in-process
   "Simplified in-process Jepsen test that avoids serialization issues"
   (:require [clojure.tools.logging :refer [info debug error]]
             [jepsen [cli :as cli]
@@ -111,7 +111,7 @@
 ;; DB that manages nodes outside of test map
 (defrecord SimpleDB []
   db/DB
-  (setup! [_ _ node]
+  (setup! [_ test node]
     (let [node-instance (start-node node (:nodes test))]
       (swap! nodes assoc node node-instance)
       ;; Wait a bit for the node to initialize

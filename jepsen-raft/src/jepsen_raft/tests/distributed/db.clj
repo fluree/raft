@@ -1,4 +1,4 @@
-(ns jepsen-raft.distributed-db
+(ns jepsen-raft.tests.distributed.db
   "Database setup for distributed Raft nodes"
   (:require [clojure.tools.logging :refer [info warn]]
             [jepsen.control :as c]

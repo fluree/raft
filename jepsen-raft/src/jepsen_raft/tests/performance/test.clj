@@ -1,4 +1,4 @@
-(ns jepsen-raft.performance-test
+(ns jepsen-raft.tests.performance.test
   "Performance stress test for distributed Raft cluster to measure true throughput limits
    
    This test is designed to find the breaking point of the Raft cluster by systematically

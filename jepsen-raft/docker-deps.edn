@@ -10,12 +10,9 @@
  
  :aliases
  {;; Main Jepsen test (recommended)
-  :jepsen {:main-opts ["-m" "jepsen-raft.simple-in-process"]
+  :jepsen {:main-opts ["-m" "jepsen-raft.tests.simple.in-process"]
            :description "Robust in-process Jepsen test with proper timeout handling"}
   
-  ;; Alternative test runners
-  :run {:main-opts ["-m" "jepsen-raft.core-test"]
-        :description "Full distributed Jepsen test (requires Docker setup)"}
   
   ;; Development tools
   :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}

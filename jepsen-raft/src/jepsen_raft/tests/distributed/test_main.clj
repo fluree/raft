@@ -1,4 +1,4 @@
-(ns jepsen-raft.distributed-test-main
+(ns jepsen-raft.tests.distributed.test-main
   "Main entry point for distributed Raft nodes running in Docker containers"
   (:require [clojure.tools.logging :as log]
             [clojure.core.async :as async :refer [go]]
