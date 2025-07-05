@@ -51,6 +51,7 @@ jepsen-raft/
 │   ├── simple_in_process.clj    # In-process test (fast, with checker issues)
 │   ├── distributed_test.clj     # Distributed test (recommended)
 │   ├── distributed_test_main.clj # Docker node implementation
+│   ├── performance_test.clj     # Performance stress test and load testing
 │   └── util.clj                 # Shared utilities and state machines
 ├── docker/
 │   ├── node/
@@ -100,6 +101,38 @@ clojure -M:jepsen test simple --time-limit 5 --concurrency 5
 ```
 
 **Note**: The in-process test has linearizability checker issues but demonstrates excellent Raft performance and functional correctness.
+
+### Performance Stress Test (Distributed Load Testing)
+
+The performance test is designed to find the cluster's breaking point and understand when commands start getting dropped under heavy concurrent load.
+
+```bash
+# Run escalating load test (finds breaking point automatically)
+clojure -M:performance escalating
+
+# Run single load test with specific parameters
+clojure -M:performance single 10 50  # 10 clients, 50 commands each
+
+# Examples:
+clojure -M:performance single 5 20   # Light load test
+clojure -M:performance single 50 100 # Heavy load test
+```
+
+**What it tests:**
+- **Maximum sustainable throughput** before performance degrades
+- **Breaking point** where commands start timing out or failing
+- **Performance characteristics** at various concurrent load levels
+- **Response time distribution** under different loads
+
+**Test modes:**
+- **`escalating`**: Automatically increases load (1→2→3→5→10→15→20→30→50→75→100 clients) until success rate drops below 90%
+- **`single`**: Runs a single test with specified number of clients and commands
+
+**Expected results:**
+- **Light load (1-10 clients)**: ~33-50 ops/sec theoretical, 100% success rate
+- **Medium load (10-20 clients)**: Good performance, possible occasional timeouts
+- **Heavy load (20+ clients)**: Election instability, increased failures
+- **Breaking point**: Typically around 20-30 concurrent clients when leader election becomes unstable
 
 ### Development Tools
 ```bash
