@@ -6,7 +6,9 @@
         org.clojure/data.json {:mvn/version "2.4.0"}
         com.taoensso/nippy {:mvn/version "3.2.0"}
         ring/ring-core {:mvn/version "1.9.6"}
-        ring/ring-jetty-adapter {:mvn/version "1.9.6"}}
+        ring/ring-jetty-adapter {:mvn/version "1.9.6"}
+        ring/ring-json {:mvn/version "0.5.1"}
+        net.async/async {:mvn/version "0.1.0"}}
  
  :aliases
  {;; Main Jepsen test (recommended)
@@ -21,6 +23,10 @@
   ;; Performance testing
   :performance {:main-opts ["-m" "jepsen-raft.tests.performance.test"]
                 :description "Run performance stress tests against distributed cluster"}
+  
+  ;; Net.async test
+  :netasync {:main-opts ["-m" "jepsen-raft.tests.netasync.test"]
+             :description "Distributed test using net.async TCP like Fluree Server"}
   
   ;; Development tools
   :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}
