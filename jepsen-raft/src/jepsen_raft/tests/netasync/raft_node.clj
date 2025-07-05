@@ -15,7 +15,10 @@
             [jepsen-raft.util :as util]
             [ring.adapter.jetty :as jetty]
             [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
-            [ring.util.response :as response]))
+            [ring.util.response :as response]
+            [clj-http.client]
+            [clojure.data.json :as json])
+  (:import [java.io ByteArrayInputStream]))
 
 ;; =============================================================================
 ;; State Management
@@ -90,11 +93,13 @@
   [from-server to-server header data]
   (if-let [write-chan (get-write-channel-for-node from-server to-server)]
     (do
-      (log/debug from-server "→" to-server "RPC:" (:op header))
+      (log/debug from-server "→" to-server "RPC:" (:op header) 
+                 (when (= :request-vote (:op header))
+                   (str "term=" (:term data))))
       (send-message-to-channel write-chan header data)
       true)
     (do
-      (log/warn from-server "No connection to" to-server)
+      (log/debug from-server "No connection to" to-server "for RPC:" (:op header))
       false)))
 
 (defn- invoke-raft-rpc
@@ -103,11 +108,14 @@
   (let [result-promise (promise)
         event-chan (raft/event-chan raft-instance)]
     
-    (log/debug "Processing Raft RPC:" op)
+    (log/debug "Processing incoming RPC:" op "from" (:from header)
+               (when (= :request-vote op)
+                 (str "term=" (:term data))))
     
     ;; Invoke RPC asynchronously
     (raft/invoke-rpc* event-chan op data
                       (fn [result]
+                        (log/debug "RPC response for" op ":" result)
                         (deliver result-promise result)))
     
     ;; Wait for result with timeout
@@ -166,6 +174,7 @@
   (update-connection-status server-id remote-id :connected)
   ;; Send hello on outbound connections
   (when (= :outbound conn-type)
+    (log/debug server-id "Sending HELLO to" remote-id)
     (send-message-to-channel write-chan
                              {:type :hello :from server-id :to remote-id}
                              nil)))
@@ -299,9 +308,10 @@
                     :type       :outbound
                     :status     :connecting
                     :remote-id  remote-id}]
+          (log/debug server-id "TCP client connected to" remote-id)
           (store-connection server-id remote-id conn)
           (monitor-connection server-id conn remote-id :outbound raft-instance))
-        (log/error server-id "Failed to connect to" remote-id)))))
+        (log/warn server-id "Failed to connect to" remote-id "at" (str host ":" port))))))
 
 (defn- connect-to-server
   "Establish outbound connection to a remote server."
@@ -431,9 +441,11 @@
 (defn- handle-command
   "Process a command request from HTTP interface."
   [raft-instance command-params]
-  (-> command-params
-      build-raft-command
-      (->> (submit-command-to-raft raft-instance))))
+  (let [command (build-raft-command command-params)]
+    (log/info "Processing command:" command)
+    (let [result (submit-command-to-raft raft-instance command)]
+      (log/debug "Command result:" result)
+      result)))
 
 (defn- get-current-raft-state
   "Get current Raft state synchronously."
@@ -444,10 +456,24 @@
                            (deliver state-promise state)))
     (deref state-promise timeout-ms nil)))
 
+(defn- parse-request-body
+  "Parse request body based on Content-Type header."
+  [request]
+  (let [content-type (get-in request [:headers "content-type"])]
+    (cond
+      ;; Nippy binary format
+      (= content-type "application/octet-stream")
+      (nippy/thaw (-> request :body slurp .getBytes))
+      
+      ;; JSON format (default)
+      :else
+      (:body request))))
+
 (defn- prepare-command-from-request
   "Prepare command from HTTP request body."
   [request]
-  (update (:body request) :op keyword))
+  (let [body (parse-request-body request)]
+    (update body :op keyword)))
 
 (defn- build-debug-response
   "Build debug response with node and Raft state."
@@ -460,14 +486,76 @@
    :index (:index current-state)
    :state-machine @state-atom})
 
+(defn- forward-command-to-leader
+  "Forward command to the leader node via HTTP."
+  [leader-id command port-map content-type]
+  (if-let [leader-port (get port-map leader-id)]
+    (try
+      (log/info "Forwarding command" (:op command) "to leader" leader-id 
+                "at port" leader-port)
+      (let [url (str "http://localhost:" leader-port "/command")
+            ;; Forward with same content-type as original request
+            response (if (= content-type "application/octet-stream")
+                       ;; Nippy format
+                       (clj-http.client/post url
+                                           {:body (nippy/freeze command)
+                                            :headers {"Content-Type" "application/octet-stream"}
+                                            :as :byte-array
+                                            :socket-timeout 10000
+                                            :connection-timeout 1000
+                                            :throw-exceptions false})
+                       ;; JSON format
+                       (clj-http.client/post url
+                                           {:body (json/write-str command)
+                                            :content-type :json
+                                            :accept :json
+                                            :as :json
+                                            :socket-timeout 10000
+                                            :connection-timeout 1000
+                                            :throw-exceptions false}))]
+        (if (= 200 (:status response))
+          (let [result (if (= content-type "application/octet-stream")
+                         (nippy/thaw (:body response))
+                         (:body response))]
+            (log/debug "Leader forward successful:" result)
+            result)
+          (do
+            (log/warn "Leader forward failed with status" (:status response))
+            {:type :fail :error "Leader forward failed"})))
+      (catch Exception e
+        (log/error e "Failed to forward command to leader")
+        {:type :fail :error "Leader forward error"}))
+    (do
+      (log/error "Leader port not found for" leader-id "in port map" port-map)
+      {:type :fail :error "Leader port not found"})))
+
+(defn- serialize-response
+  "Serialize response based on request content-type."
+  [response content-type]
+  (if (= content-type "application/octet-stream")
+    {:status 200
+     :headers {"Content-Type" "application/octet-stream"}
+     :body (java.io.ByteArrayInputStream. (nippy/freeze response))}
+    (response/response response)))
+
 (defn- handle-command-request
   "Handle /command endpoint."
-  [raft-instance request]
-  (let [command (prepare-command-from-request request)
+  [raft-instance request port-map]
+  (let [content-type (get-in request [:headers "content-type"])
+        command (prepare-command-from-request request)
         current-state (get-current-raft-state raft-instance 1000)]
-    (if (= :leader (:status current-state))
-      (response/response (handle-command raft-instance command))
-      (response/response {:type :fail :error "Not leader"}))))
+    (cond
+      ;; We are the leader - process command
+      (= :leader (:status current-state))
+      (serialize-response (handle-command raft-instance command) content-type)
+      
+      ;; We know who the leader is - forward to them
+      (:leader current-state)
+      (serialize-response (forward-command-to-leader (:leader current-state) command port-map content-type) content-type)
+      
+      ;; No leader elected yet
+      :else
+      (serialize-response {:type :fail :error "No leader elected"} content-type))))
 
 (defn- handle-debug-request
   "Handle /debug endpoint."
@@ -477,11 +565,11 @@
 
 (defn- create-http-handler
   "Create Ring handler for HTTP interface."
-  [raft-instance server-id state-atom]
+  [raft-instance server-id state-atom port-map]
   (fn [request]
     (try
       (case (:uri request)
-        "/command" (handle-command-request raft-instance request)
+        "/command" (handle-command-request raft-instance request port-map)
         "/debug"   (handle-debug-request raft-instance server-id state-atom)
         "/health"  (response/response {:status "ok"})
         (response/not-found "Not found"))
@@ -525,11 +613,25 @@
         :rpc-sender-fn rpc-sender)
       (merge (create-snapshot-config (atom {})))))
 
+(defn- wrap-content-type-middleware
+  "Middleware to handle different content types."
+  [handler]
+  (fn [request]
+    (let [content-type (get-in request [:headers "content-type"])]
+      (if (= content-type "application/octet-stream")
+        ;; For binary requests, don't use JSON middleware
+        (handler request)
+        ;; For JSON requests, parse the body
+        (let [body-string (slurp (:body request))
+              parsed-body (when-not (empty? body-string)
+                            (json/read-str body-string :key-fn keyword))]
+          (handler (assoc request :body parsed-body)))))))
+
 (defn- create-http-app
   "Create HTTP application with middleware."
   [handler]
   (-> handler
-      (wrap-json-body {:keywords? true})
+      wrap-content-type-middleware
       wrap-json-response))
 
 (defn- start-http-server
@@ -556,7 +658,7 @@
 (defn start-node
   "Start a Raft node with net.async TCP for inter-node communication."
   [node-id tcp-port http-port nodes]
-  (log/info "Starting Raft node" node-id)
+  (log/info "Starting Raft node" node-id "TCP:" tcp-port "HTTP:" http-port)
   
   (let [;; State machine setup
         state-atom (atom {})
@@ -574,11 +676,12 @@
         tcp-shutdown (start-tcp-server node-id tcp-port raft-instance)
         
         ;; Outbound connections setup
-        port-map {"n1" 9001 "n2" 9002 "n3" 9003}
-        _ (setup-outbound-connections node-id nodes port-map raft-instance)
+        tcp-port-map {"n1" 9001 "n2" 9002 "n3" 9003}
+        http-port-map {"n1" 7001 "n2" 7002 "n3" 7003}
+        _ (setup-outbound-connections node-id nodes tcp-port-map raft-instance)
         
         ;; HTTP server setup
-        http-handler (create-http-handler raft-instance node-id state-atom)
+        http-handler (create-http-handler raft-instance node-id state-atom http-port-map)
         http-app (create-http-app http-handler)
         http-server (start-http-server http-app http-port)]
     
