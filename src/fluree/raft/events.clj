@@ -232,7 +232,13 @@
                         :snapshot-pending snapshot-pending
                         :command-callbacks (reduce
                                              (fn [callbacks entry-map]
-                                               (let [resp (state-machine (:entry entry-map) raft-state)]
+                                               (let [resp (try
+                                                           (state-machine (:entry entry-map) raft-state)
+                                                           (catch Exception e
+                                                             (log/error e (format "State machine error processing entry: %s. Expected vector format [command params...] but received: %s"
+                                                                                  (:entry entry-map)
+                                                                                  (type (:entry entry-map))))
+                                                             {:error (str "State machine error: " (.getMessage e))}))]
                                                  (if-let [callback-chan (get callbacks (:id entry-map))]
                                                    (do
                                                      (if (nil? resp)

@@ -11,22 +11,17 @@
         net.async/async {:mvn/version "0.1.0"}}
  
  :aliases
- {;; Main Jepsen test (recommended)
-  :jepsen {:main-opts ["-m" "jepsen-raft.tests.netasync.test"]
-           :description "Net.async-based distributed test like Fluree Server"}
+ {;; Main Jepsen test (default)
+  :netasync {:main-opts ["-m" "jepsen-raft.test"]
+             :description "Net.async TCP-based test"}
   
-  ;; Distributed test
-  :distributed {:main-opts ["-m" "jepsen-raft.tests.distributed.test"]
-                :description "Distributed Jepsen test using Docker containers"}
-  
+  ;; Dockerized net.async with network failure testing
+  :netasync-docker {:main-opts ["-m" "jepsen-raft.test-docker"]
+                    :description "Dockerized net.async test with network partition nemesis"}
   
   ;; Performance testing
-  :performance {:main-opts ["-m" "jepsen-raft.tests.performance.test"]
-                :description "Run performance stress tests against distributed cluster"}
-  
-  ;; Net.async test
-  :netasync {:main-opts ["-m" "jepsen-raft.tests.netasync.test"]
-             :description "Distributed test using net.async TCP like Fluree Server"}
+  :performance {:main-opts ["-m" "jepsen-raft.test-performance"]
+                :description "Run performance stress tests"}
   
   ;; Development tools
   :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}

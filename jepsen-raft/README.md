@@ -1,446 +1,322 @@
 # Jepsen Tests for Fluree Raft
 
-This directory contains Jepsen tests for the Fluree Raft implementation. These
-tests verify the correctness of the Raft consensus algorithm under various
-failure scenarios.
+This directory contains Jepsen tests for the Fluree Raft implementation. These tests verify the correctness of the Raft consensus algorithm under various failure scenarios using a production-grade TCP-based implementation with net.async.
 
 ## Prerequisites
 
 ### Required Dependencies
 - **Java 21+** (required by Jepsen 0.3.5)
 - **Clojure 1.11.1+**
-- **gnuplot** (for performance graphs) - Install with `brew install gnuplot`
-  on macOS
+- **gnuplot** (for performance graphs) - Install with `brew install gnuplot` on macOS
 
-### For Distributed Testing
-- **Docker** (for containerized distributed testing)
+### For Dockerized Testing
+- **Docker** (for containerized testing with network failures)
 - **Docker Compose** (for orchestrating multi-node test environment)
 
 ## Quick Start
 
-### Net.async Test (Default)
-
+### Local Testing (Non-Dockerized)
 ```bash
-# Run the default net.async test
-clojure -M:netasync test netasync --time-limit 10 --concurrency 1 --nodes n1,n2,n3
+# Run the default test
+make test
 
-# With custom parameters
-clojure -M:netasync test netasync --time-limit 30 --concurrency 3 --nodes n1,n2,n3
+# With custom time limit
+TIME=30 make test
 ```
 
-### Distributed Test (Docker-based)
-
+### Dockerized Testing (Recommended for Production Validation)
 ```bash
-# Start the distributed environment
-cd docker && docker-compose up -d --build
+# Run dockerized test with network failures
+make test-docker
 
-# Run distributed test
-cd .. && clojure -M:distributed test distributed --time-limit 10 --concurrency 1 --no-ssh --nodes n1,n2,n3
+# Run minimal test without network failures (faster)
+make test-docker-minimal
 ```
+
+### Performance Testing
+```bash
+# Run escalating load test to find cluster limits
+make performance
+```
+
+## Test Suites Overview
+
+We have **3 test suites**, each designed to validate different aspects of the Raft implementation:
+
+### 1. Local Net.Async Test (`test.clj`)
+- **Command**: `make test` or `clojure -M:netasync test netasync`
+- **Purpose**: Basic Raft consensus validation with TCP communication
+- **Environment**: Local processes using net.async library
+- **Key Features**:
+  - Quick development iteration
+  - No network failures (no nemesis)
+  - Tests read, write, CAS, and delete operations
+  - Verifies linearizability (strong consistency)
+  - Best for development and debugging
+
+### 2. Dockerized Test with Network Failures (`test_docker.clj`)
+- **Commands**: 
+  - Full test: `make test-docker` (60s default)
+  - Minimal test: `make test-docker-minimal` (30s default)
+- **Purpose**: Validate Raft behavior under realistic network failures
+- **Environment**: Docker containers with network isolation
+- **Key Features**:
+  - Network partition testing (isolate nodes)
+  - Network latency injection (configurable delays)
+  - Split-brain scenario testing
+  - Phased testing approach:
+    - Phase 1: Operations without failures (baseline)
+    - Phase 2: Operations with network partitions and latency
+    - Phase 3: Recovery validation
+  - Most realistic production-like testing
+
+### 3. Performance Stress Test (`test_performance.clj`)
+- **Command**: `make performance` or `clojure -M:performance`
+- **Purpose**: Identify cluster throughput limits and breaking points
+- **Test Modes**:
+  - **Escalating**: Automatically increases load from 1 to 100 concurrent clients
+  - **Single**: Fixed load test with specified clients/commands
+- **Metrics Tracked**:
+  - Throughput (operations per second)
+  - Response times (average, min, max, 95th percentile)
+  - Success/failure rates
+  - Breaking point identification (when success rate < 70%)
+- **Use Cases**:
+  - Capacity planning
+  - Performance regression testing
+  - Hardware sizing recommendations
+
+### Common Test Characteristics
+All tests share these features:
+- **Operations tested**: 
+  - Read: Retrieve value for a key
+  - Write: Set value for a key
+  - CAS: Atomic compare-and-swap
+  - Delete: Remove a key
+- **Keys used**: `:x`, `:y`, `:z`
+- **Consistency verification**: Jepsen's linearizability checker
+- **Performance metrics**: Latency graphs, rate graphs, operation timelines
 
 ## Project Structure
 
 ```
 jepsen-raft/
-├── Makefile                 # Convenient test commands
-├── README.md                # This documentation
-├── deps.edn                 # Dependencies and aliases
+├── Makefile                    # Convenient test commands
+├── README.md                   # This documentation
+├── deps.edn                    # Dependencies and aliases
 ├── src/jepsen_raft/
-│   ├── tests/
-│   │   ├── distributed/         # Docker-based distributed test
-│   │   │   ├── test.clj         # Main distributed test runner
-│   │   │   ├── test_main.clj    # Docker node implementation
-│   │   │   ├── client.clj       # Distributed client implementation
-│   │   │   └── db.clj           # Distributed database setup
-│   │   ├── netasync/            # Net.async TCP test (default)
-│   │   │   ├── test.clj         # Main test runner
-│   │   │   ├── node.clj         # TCP node implementation
-│   │   │   ├── raft_node.clj    # Raft node wrapper
-│   │   │   ├── tcp.clj          # TCP communication layer
-│   │   │   ├── client.clj       # Client implementation
-│   │   │   └── db.clj           # Database setup
-│   │   └── performance/         # Load and stress testing
-│   │       └── test.clj         # Performance stress test
-│   └── util.clj                 # Shared utilities and state machines
+│   ├── client.clj              # Jepsen client implementation
+│   ├── db.clj                  # Database setup for local testing
+│   ├── db_docker.clj           # Docker container management
+│   ├── nemesis_docker.clj      # Network failure injection
+│   ├── raft_node.clj           # Complete Raft node implementation
+│   ├── test.clj                # Local test runner
+│   ├── test_docker.clj         # Dockerized test runner
+│   ├── test_performance.clj    # Performance stress test
+│   └── util.clj                # Shared utilities and state machines
 ├── docker/
 │   ├── node/
-│   │   ├── Dockerfile       # Raft node container definition
-│   │   ├── supervisord.conf # Process management config
-│   │   └── start-node.sh    # Node startup script
-│   └── docker-compose.yml   # 3-node distributed test environment
-├── test-command.clj         # Manual test script for distributed setup
-├── test-distributed.sh     # Distributed test runner script
-└── store/                  # Test results and artifacts
-    └── raft-*/             # Timestamped test results
+│   │   └── Dockerfile          # Container definition
+│   ├── docker-compose.yml      # 3-node cluster configuration
+│   └── test-network-partition.sh # Network failure testing script
+└── store/                      # Test results and artifacts
 ```
 
-## Available Test Runners
+## Testing Scenarios and When to Use Each
 
-### Distributed Test
+### Development Workflow
+1. **Initial development**: Use `make test` for quick iteration
+2. **Pre-commit validation**: Run `make test-docker-minimal`
+3. **Full validation**: Execute `make test-docker` with network failures
+4. **Performance check**: Run `make performance` to ensure no regression
 
-The distributed test runs Raft across Docker containers with HTTP communication and leader forwarding.
+### CI/CD Pipeline
+1. **Pull Request**: `make test-docker-minimal` (fast validation)
+2. **Main branch**: `make test-docker` (comprehensive testing)
+3. **Release**: Full suite including performance tests
+
+### Production Validation
+1. **Deployment testing**: Use dockerized tests to simulate production environment
+2. **Capacity planning**: Run performance tests with expected load patterns
+3. **Failure scenario validation**: Use network partition tests
+
+## Network Failure Testing
+
+The dockerized environment includes network failure simulation:
 
 ```bash
-# Start 3-node distributed environment
-cd docker && docker-compose up -d --build
+# Navigate to docker directory
+cd docker
 
-# Run distributed test
-cd .. && clojure -M:distributed test distributed \
-  --time-limit 10 \
-  --concurrency 1 \
-  --no-ssh \
-  --nodes n1,n2,n3
+# Partition individual nodes
+./test-network-partition.sh partition-n1  # Isolate node n1
+./test-network-partition.sh partition-n2  # Isolate node n2
+./test-network-partition.sh partition-n3  # Isolate node n3
 
-# Test manual operations
-clojure -M test-command.clj
+# Create split-brain (n1,n2 vs n3)
+./test-network-partition.sh split-brain
 
-# Check individual node status
+# Add network latency
+./test-network-partition.sh add-latency 200  # Add 200ms latency
+
+# Heal all partitions
+./test-network-partition.sh heal-all
+
+# Remove latency
+./test-network-partition.sh remove-latency
+
+# Check cluster status
+./test-network-partition.sh status
+
+# Run automated test scenario
+./test-network-partition.sh test-scenario 30  # 30-second per phase
+```
+
+## Test Results and Analysis
+
+### Finding Results
+Test results are stored in timestamped directories:
+
+```bash
+# View latest test results
+ls -la store/raft-netasync*/latest/
+ls -la store/raft-netasync-docker*/latest/
+
+# Open interactive timeline
+open store/raft-netasync*/latest/timeline.html
+```
+
+### Result Files
+- **`results.edn`**: Summary of test results and checker outputs
+- **`history.edn`**: Complete operation history
+- **`timeline.html`**: Interactive visual timeline
+- **`jepsen.log`**: Detailed test execution logs
+- **`latency-raw.png`**: Raw latency measurements
+- **`latency-quantiles.png`**: Latency distribution
+- **`rate.png`**: Throughput over time
+
+### Performance Characteristics
+Based on our stress testing:
+- **Light load (1-10 clients)**: 50-120 ops/sec
+- **Medium load (50 clients)**: 340+ ops/sec  
+- **Heavy load (100+ clients)**: 560-570 ops/sec peak
+- **Average latency**: 13-57ms depending on load
+- **P95 latency**: 18-127ms depending on load
+- **Breaking point**: Typically >100 concurrent clients
+
+## Development and Debugging
+
+### Available Make Targets
+```bash
+make help                # Show all available commands
+make test                # Run non-dockerized test
+make test-docker         # Run dockerized test with nemesis
+make test-docker-minimal # Run dockerized test without nemesis
+make docker-build        # Build Docker images
+make docker-up           # Start Docker cluster
+make docker-down         # Stop Docker cluster
+make docker-logs         # View container logs
+make docker-test-network # Test network partitions
+make performance         # Run performance test
+make lint                # Lint source code
+make clean               # Clean all test artifacts
+```
+
+### Manual Testing
+```bash
+# Check node status
 curl -s http://localhost:7001/debug | jq  # n1
 curl -s http://localhost:7002/debug | jq  # n2
 curl -s http://localhost:7003/debug | jq  # n3
+
+# Send commands
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"op":"write","key":"test","value":"hello"}' \
+  http://localhost:7001/command
+
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"op":"read","key":"test"}' \
+  http://localhost:7001/command
 ```
-
-### Net.async Test (Default)
-
-```bash
-# Run net.async test with various concurrency levels
-clojure -M:netasync test netasync --time-limit 10 --concurrency 1 --nodes n1,n2,n3
-clojure -M:netasync test netasync --time-limit 10 --concurrency 3 --nodes n1,n2,n3  
-clojure -M:netasync test netasync --time-limit 10 --concurrency 5 --nodes n1,n2,n3
-```
-
-### Performance Stress Test
-
-```bash
-# Run escalating load test
-clojure -M:performance escalating
-
-# Run single load test with specific parameters
-clojure -M:performance single 10 50  # 10 clients, 50 commands each
-```
-
-**Test modes:**
-- **`escalating`**: Automatically increases load until success rate drops below 90%
-- **`single`**: Runs a single test with specified number of clients and commands
-
-**Performance characteristics:**
-- Light load (1-10 clients): 50-100 ops/sec
-- Medium load (10-30 clients): 100-150 ops/sec  
-- Heavy load (30-50 clients): 150+ ops/sec before degradation
-- Breaking point: Around 50-75 concurrent clients
-
-### Development Tools
-```bash
-# Lint source code
-clojure -M:lint
-
-# Clean Docker environment
-cd docker && docker-compose down -v
-
-# View container logs
-docker logs jepsen-n1
-docker logs jepsen-n2
-docker logs jepsen-n3
-```
-
-## Test Implementations
-
-### Net.async Test (Default)
-
-TCP-based communication using the net.async library.
-
-**Features:**
-- Leader election in 3-node cluster
-- TCP-based RPC communication  
-- All CRUD operations (read, write, CAS, delete)
-- High throughput (50-150+ ops/sec)
-
-### Distributed Test
-
-Docker-based test with HTTP communication.
-
-**Features:**
-- 3-node Docker cluster 
-- HTTP-based RPC with leader forwarding
-- Real network communication
-- All CRUD operations
-
-**Operations tested:**
-- **Write**: `{:f :write, :key :x, :value 42}`
-- **Read**: `{:f :read, :key :x}`  
-- **Compare-and-swap**: `{:f :cas, :key :x, :old 42, :new 43}`
-- **Delete**: `{:f :delete, :key :x}`
-
-## Test Results
-
-### Test Status
-
-| Test Type | Status | Performance | Notes |
-|-----------|--------|-------------|-------|
-| **Net.async** | ✅ Working | 50-150 ops/sec | Default implementation |
-| **Distributed** | ✅ Working | 20-30ms ops | Docker-based alternative |
-
-### Performance Characteristics
-
-**Net.async Test:**
-- Light load: 50-100 ops/sec
-- Medium load: 100-150 ops/sec  
-- Heavy load: 150+ ops/sec before degradation
-- Breaking point: Around 50-75 concurrent clients
-
-**Distributed Test:**
-- Individual operations: 20-30ms response time
-- Throughput: Varies with test framework stagger settings
-
-### Finding Test Results
-
-After running a test, results are stored in timestamped directories:
-
-```bash
-# View the latest net.async test results  
-ls -la store/raft-netasync/
-
-# View the latest distributed test results
-ls -la store/raft-distributed/
-```
-
-### Understanding Test Output
-
-Each test run creates a timestamped directory like `store/raft-netasync/20250704T094455.975-0400/` containing:
-
-- **`results.edn`**: Summary of test results and checker outputs
-- **`history.edn`**: Complete operation history for analysis
-- **`timeline.html`**: Interactive visual timeline of all operations (open in browser)
-- **`jepsen.log`**: Detailed test execution logs
-- **`latency-quantiles.png`**: Latency distribution graphs (requires gnuplot)
-- **`latency-raw.png`**: Raw latency data over time (requires gnuplot)
-- **`rate.png`**: Operation rate graphs (requires gnuplot)
-
-### Viewing Results
-
-```bash
-# Open the interactive timeline in your default browser
-open store/latest/timeline.html
-
-# View the test summary
-cat store/latest/results.edn
-
-# Check detailed logs for debugging
-less store/latest/jepsen.log
-
-# View performance graphs (if gnuplot is installed)
-open store/latest/latency-quantiles.png
-open store/latest/rate.png
-```
-
-### Key Success Indicators
-
-#### Distributed Test (Expected Results)
-1. **All operations return `:type :ok`** - 100% success rate
-2. **Leader election and forwarding** - Commands forwarded from followers to leader
-3. **Fast response times** - 12-27ms per operation  
-4. **No timeouts or failures** - Clean operation execution
-
-#### Net.async Test (Expected Results)
-1. **All operations return `:type :ok`** - 100% success rate
-2. **TCP-based communication** - Production-like network layer
-3. **High throughput** - 50-150+ ops/sec sustained
-4. **Linearizability verified** - Full correctness validation
-
-### Example Results
-
-#### Net.async Test
-```bash
-# 20-second test with 10 concurrent clients
-1500+ operations over 20 seconds = 75+ ops/sec
-Response times: 5-10ms per operation
-Success rate: 100%
-```
-
-#### Distributed Test  
-```bash
-# 20-second test with 2 concurrent clients  
-128 operations over 20 seconds = 6.4 ops/sec
-Response times: 20-30ms per operation
-Success rate: 100%
-```
-
-## Implementation Status
-
-### Net.async Test (Default)
-- All operations work: Read, write, CAS, delete
-- TCP networking using net.async library
-- High throughput: 50-150+ ops/sec
-- Linearizability verification
-
-### Distributed Test  
-- All operations work: Read, write, CAS, delete
-- HTTP-based communication with leader forwarding
-- Response times: 20-30ms per operation
-- Docker container deployment
-
-## Architecture Details
-
-### Net.async Test (Default)
-- 3 Raft instances with TCP communication (n1, n2, n3)
-- TCP-based using net.async library
-- Key-value store state machine
-- Binary protocol over TCP with serialization
-
-### Distributed Test
-- 3 Docker containers (n1, n2, n3) with Raft instances  
-- HTTP communication via localhost:7001-7003
-- Key-value store with Jepsen operation adaptation (`:f` → `:op`)
-- HTTP POST with Nippy serialization
-- Leader forwarding with dynamic detection
-- Endpoints: `/command`, `/debug`, `/health`, `/rpc`
-
-### Configuration
-Test parameters defined in `util.clj`:
-- Operation timeout: 5000ms, heartbeat: 100ms, election timeout: 300ms
-- Test keys: (:x, :y, :z), value range: (0-99), RPC delay: (0-5ms)  
-- 3 nodes, snapshot threshold: 100 entries
-- Docker ports: n1→7001, n2→7002, n3→7003
-
-## Development
-
-### Adding New Tests
-1. Create new operation generators in the appropriate test file
-2. Update state machine in `util.clj` if needed
-3. Test with net.async setup (default)
-4. Verify with distributed setup if needed
 
 ### REPL Development
 ```clojure
-;; Load the net.async test namespace (default)
-(require '[jepsen-raft.tests.netasync.test :as netasync])
+;; Load the test namespace
+(require '[jepsen-raft.test :as test])
 
-;; Load the distributed test namespace  
-(require '[jepsen-raft.tests.distributed.test :as dist])
+;; Run a quick test
+(test/-main "test" "netasync" "--time-limit" "10")
 
-;; Run a quick net.async test
-(netasync/-main "test" "netasync" "--time-limit" "10")
+;; Load the dockerized test
+(require '[jepsen-raft.test-docker :as docker-test])
 
-;; Run a quick distributed test
-(dist/-main "test" "distributed" "--time-limit" "10")
+;; Run dockerized test
+(docker-test/-main "test" "docker" "--minimal" "--time-limit" "10")
 ```
 
-## Troubleshooting and Common Issues
+## Architecture Details
 
-### Distributed Test Issues
+### Node Configuration
+- **3 Raft nodes**: n1, n2, n3
+- **TCP ports**: 9001-9003 for Raft RPC communication
+- **HTTP ports**: 7001-7003 for client commands
+- **Connection pattern**: Lower-ID nodes connect to higher-ID nodes
+- **Automatic reconnection** with exponential backoff
 
-**Container startup problems**:
+### Protocol Details
+- **TCP communication** using net.async library for networking
+- **Binary serialization** with Nippy for efficiency
+- **HTTP interface** for client commands (supports both JSON and Nippy)
+- **Leader forwarding** when followers receive client commands
+
+### Test Parameters
+- **Operation timeout**: 5000ms
+- **Heartbeat interval**: 100ms  
+- **Election timeout**: 300ms
+- **Snapshot threshold**: 100 entries
+- **Test keys**: :x, :y, :z
+- **Value range**: 0-99
+
+## Troubleshooting
+
+### Common Issues
+
+**Port conflicts**: Ensure ports are available
 ```bash
-# Check container status
-docker ps | grep jepsen
-
-# View container logs  
-docker logs jepsen-n1
-
-# Restart containers if needed
-cd docker && docker-compose restart
-```
-
-**Leader election issues**:
-```bash
-# Check which node is leader
-for i in 1 2 3; do
-  echo "=== Node n$i ==="
-  curl -s http://localhost:700$i/debug | jq
-done
-```
-
-**Port conflicts**:
-```bash
-# Check if ports 7001-7003 are available
 lsof -i :7001-7003
-
-# Kill conflicting processes if needed
-docker-compose down -v
+lsof -i :9001-9003
 ```
 
-### Net.async Test Issues
-
-**TCP port conflicts**: Ensure ports 9001-9003 are available for TCP communication.
-
-**Performance tuning**: Adjust TCP buffer sizes and thread pool configuration for optimal throughput.
-
-## TODO List
-
-### Completed ✅
-- [x] Create net.async TCP-based test implementation
-- [x] Create Docker-based distributed test setup  
-- [x] Fix distributed command processing
-- [x] Implement leader forwarding
-- [x] Dynamic state retrieval
-- [x] TCP-based RPC with net.async
-
-### High Priority
-- [ ] Add nemesis for network partitions in net.async test
-- [ ] Implement membership change testing (add/remove nodes dynamically)
-- [ ] Add more sophisticated failure modes (process kills, network splits)
-- [ ] Optimize TCP performance for even higher throughput
-
-### Medium Priority  
-- [ ] Add performance benchmarking with specific workloads
-- [ ] Implement multi-key transactions testing
-- [ ] Add snapshot and log compaction stress tests  
-- [ ] Scale distributed test to 5-7 nodes
-
-### Low Priority
-- [ ] Add bank account transfer workload for stronger consistency testing
-- [ ] Add clock skew simulation
-- [ ] Performance comparison with other Raft implementations
-- [ ] Add chaos engineering scenarios (random process kills, etc.)
-
-### Infrastructure Improvements
-- [ ] Automated CI/CD pipeline for tests
-- [ ] Better result analysis and reporting tools
-- [ ] Integration with monitoring/alerting systems
-- [ ] Test result archival and comparison tools
-
-### Common Issues (Legacy)
-
-**Java Version Error**: 
+**Container issues**: Check container status
+```bash
+docker ps | grep raft-
+docker logs raft-n1
 ```
-ClassNotFoundException: java.util.SequencedCollection
-```
-**Solution**: Ensure Java 21+ is active (`java -version`)
 
-**Missing Performance Graphs**:
-**Solution**: Install gnuplot (`brew install gnuplot` on macOS)
+**Clean environment**: Remove all artifacts
+```bash
+make clean
+```
 
 ### Debug Mode
 ```bash
-# Enable debug logging for distributed test
+# Enable debug logging
 export TIMBRE_LEVEL=:debug
-clojure -M:distributed test distributed --time-limit 10
-```
-
-### Cleaning Up
-```bash
-# Clean Docker environment  
-cd docker && docker-compose down -v
-
-# Remove test results
-rm -rf store/
-rm -rf /tmp/jepsen-raft/
+make test
 ```
 
 ## Contributing
 
-When contributing new tests or improvements:
+When contributing improvements:
 
-1. **Use distributed test for validation** - It provides the most reliable results
-2. **Ensure distributed tests pass** with 100% `:ok` operation success rate  
-3. **Update this README** with any new features or limitations
-4. **Test both implementations** if changes affect core Raft functionality
-5. **Include performance impact analysis** for significant changes
-6. **Document any new endpoints** or configuration options added
+1. **Test locally first**: Run `make test` for quick iteration
+2. **Verify with Docker**: Ensure `make test-docker-minimal` passes
+3. **Full validation**: Confirm `make test-docker` passes with network failures
+4. **Check performance**: Run `make performance` to ensure no regression
+5. **Update documentation**: Keep this README current
 
-### Development Workflow
-1. Make changes to Raft implementation or test infrastructure
-2. Test with net.async setup (default): `clojure -M:netasync test netasync --time-limit 10 --nodes n1,n2,n3`
-3. Verify TCP communication and performance
-4. Test distributed setup if needed: `clojure -M:distributed test distributed --time-limit 10`  
-5. Update documentation and commit changes
+## License
+
+Copyright © 2025 Fluree PBC
+
+Distributed under the same license as the Fluree Raft implementation.

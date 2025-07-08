@@ -1,32 +1,45 @@
-(ns jepsen-raft.tests.netasync.raft-node
+(ns jepsen-raft.raft-node
   "Raft node implementation using net.async TCP for inter-node communication.
    
    This implementation follows Fluree Server's pattern where:
-   - TCP connections are used for Raft RPC between nodes
+   - TCP tcp-connections are used for Raft RPC between nodes
    - HTTP interface is used for client commands
    - Lower-sorted node names connect to higher-sorted ones
    - Connections automatically reconnect on failure"
   (:require [clojure.tools.logging :as log]
-            [clojure.core.async :as async :refer [go go-loop <! >! chan]]
+            [clojure.core.async :as async :refer [go go-loop <! chan]]
             [clojure.string :as str]
             [net.async.tcp :as tcp]
             [taoensso.nippy :as nippy]
             [fluree.raft :as raft]
             [jepsen-raft.util :as util]
             [ring.adapter.jetty :as jetty]
-            [ring.middleware.json :refer [wrap-json-body wrap-json-response]]
+            [ring.middleware.json :refer [wrap-json-response]]
             [ring.util.response :as response]
             [clj-http.client]
-            [clojure.data.json :as json])
-  (:import [java.io ByteArrayInputStream]))
+            [clojure.data.json :as json]))
 
 ;; =============================================================================
 ;; State Management
 ;; =============================================================================
 
-(defonce ^:private connections (atom {}))
-(defonce ^:private client-event-loops (atom {}))
-(defonce ^:private pending-responses (atom {}))
+(defonce ^:private tcp-connections (atom {}))
+(defonce ^:private tcp-client-event-loops (atom {}))
+(defonce ^:private rpc-pending-responses (atom {}))
+(defonce ^:private tcp-connection-params (atom {}))
+
+;; Configuration constants
+(def ^:private rpc-timeout-ms 5000)
+(def ^:private reconnect-delay-ms 5000)
+(def ^:private reconnect-retry-delay-ms 10000)
+(def ^:private tcp-buffer-size 10)
+(def ^:private connection-retry-base-ms 1000)
+(def ^:private max-connection-attempts 5)
+(def ^:private connection-setup-delay-ms 1000)
+(def ^:private connection-spacing-ms 100)
+(def ^:private http-socket-timeout-ms 10000)
+(def ^:private http-connection-timeout-ms 1000)
+(def ^:private raft-state-timeout-ms 1000)
 
 ;; =============================================================================
 ;; Serialization
@@ -51,33 +64,56 @@
 ;; Connection Management
 ;; =============================================================================
 
+;; Forward declaration to resolve circular dependency
+(declare connect-to-server)
+
 (defn- get-or-create-event-loop
-  "Get existing event loop for server or create a new one."
+  "Get existing event loop for server or create a new one. 
+   Uses a single event loop per server for all outbound tcp-connections."
   [server-id]
-  (or (get @client-event-loops server-id)
+  (locking tcp-client-event-loops
+    (if-let [existing-loop (get @tcp-client-event-loops server-id)]
+      (do
+        (log/debug server-id "Reusing existing event loop")
+        existing-loop)
       (let [new-loop (tcp/event-loop)]
-        (swap! client-event-loops assoc server-id new-loop)
-        new-loop)))
+        (log/debug server-id "Creating new event loop")
+        (swap! tcp-client-event-loops assoc server-id new-loop)
+        new-loop))))
 
 (defn- get-write-channel-for-node
-  "Get the write channel for sending messages to a specific node."
+  "Get the write channel for sending messages to a specific node.
+   Returns nil if no connection exists or if the channel is closed."
   [from-server to-server]
-  (get-in @connections [from-server :conn-to to-server :write-chan]))
+  (get-in @tcp-connections [from-server :conn-to to-server :write-chan]))
 
 (defn- store-connection
-  "Store a connection in the connections map."
+  "Store a connection in the tcp-connections map, closing any existing connection."
   [server-id remote-id connection-data]
-  (swap! connections assoc-in [server-id :conn-to remote-id] connection-data))
+  (swap! tcp-connections update-in [server-id :conn-to remote-id]
+         (fn [existing-conn]
+           (when existing-conn
+             (log/debug server-id "Closing existing connection to" remote-id "before storing new one")
+             (when-let [write-chan (:write-chan existing-conn)]
+               (async/close! write-chan)))
+           connection-data)))
 
 (defn- remove-connection
-  "Remove a connection from the connections map."
+  "Remove a connection from the tcp-connections map."
   [server-id remote-id]
-  (swap! connections update-in [server-id :conn-to] dissoc remote-id))
+  (log/debug server-id "Removing connection to" remote-id)
+  (swap! tcp-connections update-in [server-id :conn-to] dissoc remote-id))
+
+(defn- get-connection
+  "Get connection from global state."
+  [server-id remote-id]
+  (get-in @tcp-connections [server-id :conn-to remote-id]))
+
 
 (defn- update-connection-status
   "Update the status of a connection."
   [server-id remote-id status]
-  (swap! connections assoc-in [server-id :conn-to remote-id :status] status))
+  (swap! tcp-connections assoc-in [server-id :conn-to remote-id :status] status))
 
 ;; =============================================================================
 ;; Message Handling
@@ -86,25 +122,41 @@
 (defn- send-message-to-channel
   "Send a serialized message through a write channel."
   [write-chan header data]
-  (async/put! write-chan (serialize-message header data)))
+  (try
+    (if (nil? write-chan)
+      false
+      (let [message (serialize-message header data)
+            success (async/put! write-chan message)]
+        ;; async/put! returns true if successful, false if channel is closed
+        (boolean success)))
+    (catch Exception e
+      (log/debug "Failed to send message to channel:" (.getMessage e))
+      false)))
 
 (defn- send-rpc-to-node
   "Send RPC message to a remote node."
   [from-server to-server header data]
-  (if-let [write-chan (get-write-channel-for-node from-server to-server)]
-    (do
-      (log/debug from-server "→" to-server "RPC:" (:op header) 
-                 (when (= :request-vote (:op header))
-                   (str "term=" (:term data))))
-      (send-message-to-channel write-chan header data)
-      true)
-    (do
-      (log/debug from-server "No connection to" to-server "for RPC:" (:op header))
-      false)))
+  (let [write-chan (get-write-channel-for-node from-server to-server)]
+    (if write-chan
+      (do
+        (log/debug from-server "→" to-server "RPC:" (:op header) 
+                   (when (= :request-vote (:op header))
+                     (str "term=" (:term data))))
+        (let [send-success (send-message-to-channel write-chan header data)]
+          (if send-success
+            true
+            (do
+              (log/debug from-server "Failed to send RPC to" to-server "- cleaning up stale connection")
+              (remove-connection from-server to-server)
+              false))))
+      (do
+        (log/debug from-server "No connection to" to-server "for RPC:" (:op header)
+                   "- available tcp-connections:" (keys (get-in @tcp-connections [from-server :conn-to])))
+        false))))
 
 (defn- invoke-raft-rpc
   "Process incoming Raft RPC and return response."
-  [raft-instance {:keys [op msg-id] :as header} data]
+  [raft-instance {:keys [op] :as header} data]
   (let [result-promise (promise)
         event-chan (raft/event-chan raft-instance)]
     
@@ -119,7 +171,7 @@
                         (deliver result-promise result)))
     
     ;; Wait for result with timeout
-    (deref result-promise 5000 {:error :timeout})))
+    (deref result-promise rpc-timeout-ms {:error :timeout})))
 
 (defn- build-response-header
   "Build a response header from a request header."
@@ -132,8 +184,8 @@
 (defn- deliver-rpc-response
   "Deliver RPC response to waiting callback."
   [msg-id response-data]
-  (when-let [callback (get @pending-responses msg-id)]
-    (swap! pending-responses dissoc msg-id)
+  (when-let [callback (get @rpc-pending-responses msg-id)]
+    (swap! rpc-pending-responses dissoc msg-id)
     (callback response-data)))
 
 (defn- process-hello-message
@@ -157,11 +209,18 @@
   "Process an incoming message based on its type."
   [server-id raft-instance conn [header data :as msg]]
   (when msg
-    (case (:type header)
-      :hello            (process-hello-message server-id (:from header))
-      :raft-rpc         (process-raft-rpc-request server-id raft-instance conn header data)
-      :raft-rpc-response (process-raft-rpc-response header data)
-      (log/warn server-id "Unknown message type:" (:type header)))))
+    (cond
+      (= :hello header)
+      (process-hello-message server-id (:server-id data))
+      
+      (map? header)
+      (case (:type header)
+        :raft-rpc         (process-raft-rpc-request server-id raft-instance conn header data)
+        :raft-rpc-response (process-raft-rpc-response header data)
+        (log/warn server-id "Unknown message type:" (:type header)))
+      
+      :else
+      (log/warn server-id "Unknown message format:" header))))
 
 ;; =============================================================================
 ;; Connection Monitoring
@@ -171,19 +230,33 @@
   "Handle newly established connection."
   [server-id remote-id conn-type write-chan]
   (log/info server-id (if (= :outbound conn-type) "→ Connected to" "← Accepted from") remote-id)
+  (log/debug server-id "Connection details - type:" conn-type "write-chan open:" (not (nil? write-chan)))
   (update-connection-status server-id remote-id :connected)
-  ;; Send hello on outbound connections
+  ;; Send hello on outbound tcp-connections (matching Fluree Server protocol)
   (when (= :outbound conn-type)
-    (log/debug server-id "Sending HELLO to" remote-id)
-    (send-message-to-channel write-chan
-                             {:type :hello :from server-id :to remote-id}
-                             nil)))
+    (let [conn-id (rand-int Integer/MAX_VALUE)]
+      (log/debug server-id "Sending HELLO to" remote-id "with id" conn-id)
+      (send-message-to-channel write-chan
+                               :hello
+                               {:server-id server-id :id conn-id}))))
 
 (defn- handle-connection-closed
   "Handle closed connection."
-  [server-id remote-id]
-  (log/info server-id "× Disconnected from" remote-id)
-  (remove-connection server-id remote-id))
+  [server-id remote-id reason]
+  ;; Only process disconnection if there was actually a connection
+  (when-let [conn (get-connection server-id remote-id)]
+    (log/info server-id "× Disconnected from" remote-id "reason:" reason)
+    (log/debug server-id "Connection state before removal:" (get-in @tcp-connections [server-id :conn-to remote-id]))
+    (remove-connection server-id remote-id)
+    ;; Attempt to reconnect if this was an outbound connection and we have the parameters
+    (when (and (= :outbound (:type conn))
+               (get-in @tcp-connection-params [server-id remote-id]))
+      (let [{:keys [host port raft-instance]} (get-in @tcp-connection-params [server-id remote-id])]
+        (log/info server-id "Scheduling reconnection to" remote-id "in" (/ reconnect-delay-ms 1000) "s")
+        (go
+          (<! (async/timeout reconnect-delay-ms))
+          (when-not (get-connection server-id remote-id)
+            (connect-to-server server-id remote-id host port raft-instance)))))))
 
 (defn- process-connection-message
   "Process a single message from connection."
@@ -191,30 +264,45 @@
   (cond
     ;; Connection status message
     (keyword? msg)
-    (case msg
-      :connected
-      (handle-connection-established server-id 
-                                     (:remote-id conn)
-                                     (:type conn)
-                                     (:write-chan conn))
-      
-      (:disconnected :closed)
-      (handle-connection-closed server-id (:remote-id conn)))
+    (do
+      (log/debug server-id "Received connection status:" msg "from" (:remote-id conn))
+      (case msg
+        :connected
+        (handle-connection-established server-id 
+                                       (:remote-id conn)
+                                       (:type conn)
+                                       (:write-chan conn))
+        
+        (:disconnected :closed)
+        (handle-connection-closed server-id (:remote-id conn) msg)
+        
+        ;; Log any unexpected status messages
+        (log/warn server-id "Unexpected connection status:" msg "from" (:remote-id conn))))
     
     ;; Data message
     (bytes? msg)
     (when-let [parsed-msg (deserialize-message msg)]
-      (process-message server-id raft-instance conn parsed-msg))))
+      (process-message server-id raft-instance conn parsed-msg))
+    
+    ;; Log unexpected message types
+    :else
+    (log/warn server-id "Unexpected message type from" (:remote-id conn) ":" (type msg) msg)))
 
-(defn- monitor-connection
-  "Monitor a connection for messages and handle disconnections."
+(defn- monitor-connection!
+  "Monitor a connection for messages and handle distcp-connections."
   [server-id conn remote-id conn-type raft-instance]
   (let [{:keys [read-chan]} conn
-        conn-with-id (assoc conn :remote-id remote-id)]
+        conn-with-id (assoc conn :remote-id remote-id :type conn-type)]
+    (log/debug server-id "Starting connection monitor for" remote-id "type:" conn-type)
     (go-loop []
-      (when-let [msg (<! read-chan)]
-        (process-connection-message server-id raft-instance conn-with-id msg)
-        (recur)))))
+      (let [msg (<! read-chan)]
+        (if (nil? msg)
+          (do
+            (log/debug server-id "Read channel closed for" remote-id "- connection ended")
+            (handle-connection-closed server-id remote-id :channel-closed))
+          (do
+            (process-connection-message server-id raft-instance conn-with-id msg)
+            (recur)))))))
 
 ;; =============================================================================
 ;; Server Setup
@@ -231,18 +319,18 @@
           (recur) ; Skip status messages
           
           (bytes? msg)
-          (when-let [[header _] (deserialize-message msg)]
-            (if (= :hello (:type header))
-              (let [remote-id (:from header)]
-                (log/info server-id "← Identified connection from" remote-id)
-                (store-connection server-id remote-id 
-                                  (assoc temp-conn :remote-id remote-id))
-                (monitor-connection server-id temp-conn remote-id :inbound raft-instance))
+          (when-let [[header data] (deserialize-message msg)]
+            (if (= :hello header)
+              (let [{remote-server-id :server-id, conn-id :id} data]
+                (log/info server-id "← Identified connection from" remote-server-id "with id" conn-id)
+                (store-connection server-id remote-server-id 
+                                  (assoc temp-conn :remote-id remote-server-id :id conn-id))
+                (monitor-connection! server-id temp-conn remote-server-id :inbound raft-instance))
               (recur))))))))
 
 (defn- handle-incoming-tcp-connection
   "Handle a new incoming TCP connection."
-  [server-id raft-instance {:keys [read-chan write-chan] :as client}]
+  [server-id raft-instance {:keys [read-chan write-chan]}]
   (let [temp-conn {:write-chan write-chan
                    :read-chan  read-chan
                    :type       :inbound
@@ -251,12 +339,13 @@
 
 (defn- create-tcp-acceptor
   "Create TCP acceptor configuration."
-  [port buffer-size]
+  [port buffer-size & {:keys [host] :or {host "localhost"}}]
   {:port port
+   :host host
    :write-chan-fn #(chan (async/dropping-buffer buffer-size))})
 
-(defn- accept-tcp-connections
-  "Accept incoming TCP connections."
+(defn- accept-tcp-tcp-connections!
+  "Accept incoming TCP tcp-connections."
   [server-id raft-instance accept-chan]
   (go-loop []
     (when-let [client (<! accept-chan)]
@@ -264,17 +353,17 @@
       (recur))))
 
 (defn- start-tcp-server
-  "Start TCP server to accept incoming Raft connections."
-  [server-id port raft-instance]
-  (log/info server-id "Starting TCP server on port" port)
+  "Start TCP server to accept incoming Raft tcp-connections."
+  [server-id port raft-instance & {:keys [host] :or {host "localhost"}}]
+  (log/info server-id "Starting TCP server on" host ":" port)
   
   (let [event-loop (tcp/event-loop)
         buffer-size 10
-        acceptor (tcp/accept event-loop (create-tcp-acceptor port buffer-size))
+        acceptor (tcp/accept event-loop (create-tcp-acceptor port buffer-size :host host))
         accept-chan (:accept-chan acceptor)]
     
-    ;; Accept connections asynchronously
-    (accept-tcp-connections server-id raft-instance accept-chan)
+    ;; Accept tcp-connections asynchronously
+    (accept-tcp-tcp-connections! server-id raft-instance accept-chan)
     
     ;; Return shutdown function
     (fn []
@@ -291,32 +380,67 @@
   [host port buffer-size]
   {:host host
    :port port
-   :write-chan (chan (async/dropping-buffer buffer-size))})
+   :write-chan (async/chan (async/dropping-buffer buffer-size))})
 
 (defn- establish-tcp-connection
-  "Establish TCP connection to remote server."
+  "Establish TCP connection to remote server with retry logic."
   [server-id remote-id host port raft-instance]
-  (go
-    (let [event-loop (get-or-create-event-loop server-id)
-          buffer-size 10
-          client-config (create-tcp-client-config host port buffer-size)
-          client (tcp/connect event-loop client-config)]
-      
-      (if client
-        (let [conn {:write-chan (:write-chan client)
-                    :read-chan  (:read-chan client)
-                    :type       :outbound
-                    :status     :connecting
-                    :remote-id  remote-id}]
-          (log/debug server-id "TCP client connected to" remote-id)
-          (store-connection server-id remote-id conn)
-          (monitor-connection server-id conn remote-id :outbound raft-instance))
-        (log/warn server-id "Failed to connect to" remote-id "at" (str host ":" port))))))
+  (go-loop [attempts 0]
+    (if (< attempts max-connection-attempts)
+      (let [event-loop (get-or-create-event-loop server-id)
+            buffer-size tcp-buffer-size
+            client-config (create-tcp-client-config host port buffer-size)
+            retry? (atom false)
+            success? (atom false)]
+        (log/debug server-id "Attempting TCP connection to" remote-id "at" (str host ":" port) "attempt" (inc attempts))
+        (try
+          (let [client (tcp/connect event-loop client-config)]
+            (log/debug server-id "tcp/connect returned:" (type client) "value:" client)
+            (if client
+              (let [write-chan (:write-chan client)
+                    read-chan (:read-chan client)]
+                (log/debug server-id "Client channels - write-chan:" write-chan "read-chan:" read-chan)
+                (if (and write-chan read-chan)
+                  (let [conn {:write-chan write-chan
+                              :read-chan  read-chan
+                              :type       :outbound
+                              :status     :connecting
+                              :remote-id  remote-id}]
+                    (log/debug server-id "TCP client connected to" remote-id "channels:" 
+                               {:write-chan (not (nil? write-chan))
+                                :read-chan (not (nil? read-chan))})
+                    (store-connection server-id remote-id conn)
+                    (monitor-connection! server-id conn remote-id :outbound raft-instance)
+                    (reset! success? true))
+                  (do
+                    (log/warn server-id "Client missing channels - write:" write-chan "read:" read-chan)
+                    (log/warn server-id "Client object keys:" (keys client))
+                    (reset! retry? true))))
+              (do
+                (log/debug server-id "Connection attempt" (inc attempts) "failed to" remote-id "- will retry")
+                (reset! retry? true))))
+          (catch Exception e
+            (log/error e server-id "Exception during TCP connection to" remote-id)
+            (reset! retry? true)))
+        
+        (cond
+          @success? nil ; Exit loop successfully
+          @retry? (do
+                    (<! (async/timeout (* connection-retry-base-ms (Math/pow 2 attempts))))
+                    (recur (inc attempts)))
+          :else nil))
+      ;; If we exhausted all attempts, schedule a reconnection attempt later
+      (when-not (get-connection server-id remote-id)
+        (log/warn server-id "Failed to connect to" remote-id "after" max-connection-attempts "attempts. Will retry in" (/ reconnect-retry-delay-ms 1000) "s")
+        (<! (async/timeout reconnect-retry-delay-ms))
+        (establish-tcp-connection server-id remote-id host port raft-instance)))))
 
 (defn- connect-to-server
   "Establish outbound connection to a remote server."
   [server-id remote-id host port raft-instance]
   (log/info server-id "→ Connecting to" remote-id "at" (str host ":" port))
+  ;; Store connection parameters for potential reconnection
+  (swap! tcp-connection-params assoc-in [server-id remote-id] {:host host :port port :raft-instance raft-instance})
   (establish-tcp-connection server-id remote-id host port raft-instance))
 
 (defn- get-servers-to-connect
@@ -326,15 +450,23 @@
        sort
        (filter #(pos? (compare % server-id)))))
 
-(defn- setup-outbound-connections
-  "Setup outbound connections following the lower→higher connection rule."
-  [server-id all-servers port-map raft-instance]
+(defn- setup-outbound-tcp-connections!
+  "Setup outbound tcp-connections following the lower→higher connection rule."
+  [server-id all-servers port-map raft-instance host-map]
   (let [servers-to-connect (get-servers-to-connect server-id all-servers)]
     (log/info server-id "Will connect to:" servers-to-connect)
     
-    (doseq [remote-id servers-to-connect]
-      (when-let [remote-port (get port-map remote-id)]
-        (connect-to-server server-id remote-id "localhost" remote-port raft-instance)))))
+    ;; Add a small delay to allow other nodes to start their TCP servers
+    (go
+      (<! (async/timeout connection-setup-delay-ms))
+      ;; Connect to servers sequentially, not concurrently
+      (doseq [remote-id servers-to-connect]
+        (when-let [remote-port (get port-map remote-id)]
+          (let [remote-host (get host-map remote-id remote-id)] ; Use hostname from host-map, fallback to node-id
+            (log/debug server-id "Connecting to" remote-id "at" remote-host ":" remote-port)
+            (connect-to-server server-id remote-id remote-host remote-port raft-instance)
+            ;; Add small delay between tcp-connections
+            (<! (async/timeout connection-spacing-ms))))))))
 
 ;; =============================================================================
 ;; Raft Integration
@@ -344,12 +476,12 @@
   "Store callback for RPC response handling."
   [msg-id callback]
   (when callback
-    (swap! pending-responses assoc msg-id callback)))
+    (swap! rpc-pending-responses assoc msg-id callback)))
 
 (defn- remove-rpc-callback
   "Remove callback after handling response."
   [msg-id]
-  (swap! pending-responses dissoc msg-id))
+  (swap! rpc-pending-responses dissoc msg-id))
 
 (defn- invoke-no-connection-callback
   "Invoke callback when there's no connection available."
@@ -397,7 +529,7 @@
   false)
 
 (defn- create-rpc-sender
-  "Create RPC sender function for Raft that uses our TCP connections."
+  "Create RPC sender function for Raft that uses our TCP tcp-connections."
   [server-id]
   (fn [& args]
     (let [[target-node message callback] (parse-rpc-arguments args)
@@ -419,14 +551,12 @@
 
 (defn- build-raft-command
   "Build Raft command from HTTP request."
-  [{:keys [op key value old new]}]
-  (case op
-    :write  {:f :write :key key :value value}
-    :read   {:f :read :key key}
-    :cas    {:f :cas :key key :old old :new new}
-    :delete {:f :delete :key key}
-    ;; Default
-    {:f :unknown :error (str "Unknown operation: " op)}))
+  [command]
+  ;; Pass through the command as-is, it's already in the correct format
+  ;; Just validate that it has an :op field
+  (if (:op command)
+    command
+    {:op :unknown :error "Missing operation field"}))
 
 (defn- submit-command-to-raft
   "Submit command to Raft and wait for result."
@@ -434,9 +564,12 @@
   (let [result-promise (promise)]
     (raft/new-entry raft-instance command
                     (fn [result]
+                      (log/debug "Raft callback received result:" result)
                       (deliver result-promise result))
-                    5000)
-    (deref result-promise 6000 {:type :info :error :timeout})))
+                    rpc-timeout-ms)
+    (let [final-result (deref result-promise 6000 {:type :info :error :timeout})]
+      (log/debug "Submit command returning result:" final-result)
+      final-result)))
 
 (defn- handle-command
   "Process a command request from HTTP interface."
@@ -501,8 +634,8 @@
                                            {:body (nippy/freeze command)
                                             :headers {"Content-Type" "application/octet-stream"}
                                             :as :byte-array
-                                            :socket-timeout 10000
-                                            :connection-timeout 1000
+                                            :socket-timeout http-socket-timeout-ms
+                                            :connection-timeout http-connection-timeout-ms
                                             :throw-exceptions false})
                        ;; JSON format
                        (clj-http.client/post url
@@ -510,8 +643,8 @@
                                             :content-type :json
                                             :accept :json
                                             :as :json
-                                            :socket-timeout 10000
-                                            :connection-timeout 1000
+                                            :socket-timeout http-socket-timeout-ms
+                                            :connection-timeout http-connection-timeout-ms
                                             :throw-exceptions false}))]
         (if (= 200 (:status response))
           (let [result (if (= content-type "application/octet-stream")
@@ -543,7 +676,7 @@
   [raft-instance request port-map]
   (let [content-type (get-in request [:headers "content-type"])
         command (prepare-command-from-request request)
-        current-state (get-current-raft-state raft-instance 1000)]
+        current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
     (cond
       ;; We are the leader - process command
       (= :leader (:status current-state))
@@ -560,7 +693,7 @@
 (defn- handle-debug-request
   "Handle /debug endpoint."
   [raft-instance server-id state-atom]
-  (let [current-state (get-current-raft-state raft-instance 1000)]
+  (let [current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
     (response/response (build-debug-response server-id current-state state-atom))))
 
 (defn- create-http-handler
@@ -571,7 +704,7 @@
       (case (:uri request)
         "/command" (handle-command-request raft-instance request port-map)
         "/debug"   (handle-debug-request raft-instance server-id state-atom)
-        "/health"  (let [current-state (get-current-raft-state raft-instance 1000)]
+        "/health"  (let [current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
                      (response/response {:status "ok" 
                                          :node-ready (not (nil? (:leader current-state)))}))
         (response/not-found "Not found"))
@@ -588,17 +721,26 @@
   "Create state machine that converts :f to :op for compatibility."
   [base-state-machine]
   (fn [entry raft-state]
-    (if (and entry (:f entry))
+    (cond
+      ;; Handle nil or empty entries
+      (or (nil? entry) (empty? entry))
+      (util/ok-result)
+      
+      ;; Normal application operations with :f field
+      (:f entry)
       (-> entry
           (assoc :op (:f entry))
           (dissoc :f)
           (base-state-machine raft-state))
-      (util/ok-result))))
+      
+      ;; Entry without :f field - likely internal Raft operation
+      :else
+      (base-state-machine entry raft-state))))
 
 (defn- create-snapshot-config
   "Create snapshot configuration."
   [state-atom]
-  {:snapshot-write (fn [index callback]
+  {:snapshot-write (fn [_index callback]
                      (when callback (callback)))
    :snapshot-reify (fn [_] @state-atom)
    :snapshot-install (constantly nil)
@@ -610,7 +752,7 @@
   [node-id nodes state-machine rpc-sender]
   (-> (util/default-raft-config
         node-id nodes
-        :log-dir (str "/tmp/jepsen-raft-netasync/" node-id "/")
+        :log-dir (str "/tmp/jepsen-raft-network/" node-id "/")
         :state-machine-fn state-machine
         :rpc-sender-fn rpc-sender)
       (merge (create-snapshot-config (atom {})))))
@@ -638,29 +780,30 @@
 
 (defn- start-http-server
   "Start HTTP server for client interface."
-  [handler port]
+  [handler port & {:keys [host] :or {host "localhost"}}]
   (jetty/run-jetty handler
                    {:port port
+                    :host host
                     :join? false}))
 
-(defn- cleanup-node-resources
+(defn- cleanup-node-resources!
   "Clean up all node resources during shutdown."
   [http-server tcp-shutdown raft-instance]
   (.stop http-server)
   (tcp-shutdown)
   (raft/close raft-instance)
   ;; Cleanup event loops
-  (doseq [[_ event-loop] @client-event-loops]
+  (doseq [[_ event-loop] @tcp-client-event-loops]
     (tcp/shutdown! event-loop))
   ;; Reset state
-  (reset! connections {})
-  (reset! client-event-loops {})
-  (reset! pending-responses {}))
+  (reset! tcp-connections {})
+  (reset! tcp-client-event-loops {})
+  (reset! rpc-pending-responses {}))
 
 (defn start-node
   "Start a Raft node with net.async TCP for inter-node communication."
-  [node-id tcp-port http-port nodes]
-  (log/info "Starting Raft node" node-id "TCP:" tcp-port "HTTP:" http-port)
+  [node-id tcp-port http-port nodes tcp-port-map http-port-map & {:keys [tcp-host http-host tcp-host-map] :or {tcp-host "localhost" http-host "localhost" tcp-host-map {}}}]
+  (log/info "Starting Raft node" node-id "TCP:" tcp-host ":" tcp-port "HTTP:" http-host ":" http-port)
   
   (let [;; State machine setup
         state-atom (atom {})
@@ -675,42 +818,104 @@
         raft-instance (raft/start raft-config)
         
         ;; TCP server setup
-        tcp-shutdown (start-tcp-server node-id tcp-port raft-instance)
+        tcp-shutdown (start-tcp-server node-id tcp-port raft-instance :host tcp-host)
         
-        ;; Outbound connections setup
-        tcp-port-map {"n1" 9001 "n2" 9002 "n3" 9003}
-        http-port-map {"n1" 7001 "n2" 7002 "n3" 7003}
-        _ (setup-outbound-connections node-id nodes tcp-port-map raft-instance)
+        ;; Outbound tcp-connections setup
+        _ (setup-outbound-tcp-connections! node-id nodes tcp-port-map raft-instance tcp-host-map)
         
         ;; HTTP server setup
         http-handler (create-http-handler raft-instance node-id state-atom http-port-map)
         http-app (create-http-app http-handler)
-        http-server (start-http-server http-app http-port)]
+        http-server (start-http-server http-app http-port :host http-host)]
     
     (log/info "Raft node" node-id "started successfully")
     
     ;; Return shutdown function
     (fn []
       (log/info "Shutting down node" node-id)
-      (cleanup-node-resources http-server tcp-shutdown raft-instance))))
+      (cleanup-node-resources! http-server tcp-shutdown raft-instance))))
 
 ;; =============================================================================
 ;; Entry Point
 ;; =============================================================================
 
+(defn- parse-node-ips
+  "Parse NODE_IPS environment variable to create port maps.
+   Format: n1:host1:port1,n2:host2:port2,n3:host3:port3"
+  [node-ips-str]
+  (when node-ips-str
+    (let [entries (str/split node-ips-str #",")
+          parsed (for [entry entries
+                       :let [[node-id host port-str] (str/split entry #":")]
+                       :when (and node-id host port-str)]
+                   [node-id {:host host :port (Integer/parseInt port-str)}])]
+      (into {} parsed))))
+
 (defn- parse-command-line-args
-  "Parse and validate command line arguments."
+  "Parse and validate command line arguments or environment variables."
   [args]
-  (when (< (count args) 4)
-    (println "Usage: node-id tcp-port http-port nodes")
-    (println "Example: n1 9001 7001 n1,n2,n3")
-    (System/exit 1))
-  
-  (let [[node-id tcp-port-str http-port-str nodes-str] args]
-    {:node-id node-id
-     :tcp-port (Integer/parseInt tcp-port-str)
-     :http-port (Integer/parseInt http-port-str)
-     :nodes (str/split nodes-str #",")}))
+  ;; Try CLI args first, then environment variables
+  (let [node-id (or (first args) (System/getenv "NODE_ID"))
+        tcp-port-str (or (second args) (System/getenv "TCP_PORT"))
+        http-port-str (or (nth args 2 nil) (System/getenv "HTTP_PORT"))
+        nodes-str (or (nth args 3 nil) (System/getenv "NODES"))
+        node-ips-str (System/getenv "NODE_IPS")
+        tcp-host (or (System/getenv "TCP_HOST") "0.0.0.0")
+        http-host (or (System/getenv "HTTP_HOST") "0.0.0.0")]
+    
+    (when (or (not node-id) (not tcp-port-str) (not http-port-str) (not nodes-str))
+      (println "Usage: node-id tcp-port http-port nodes")
+      (println "Example: n1 9001 7001 n1,n2,n3")
+      (println "")
+      (println "Or set environment variables:")
+      (println "  NODE_ID=n1")
+      (println "  TCP_PORT=9001")
+      (println "  HTTP_PORT=7001")
+      (println "  NODES=n1,n2,n3")
+      (println "  NODE_IPS=n1:host1:port1,n2:host2:port2,n3:host3:port3 (optional)")
+      (System/exit 1))
+    
+    (let [tcp-port (Integer/parseInt tcp-port-str)
+          http-port (Integer/parseInt http-port-str)
+          nodes (str/split nodes-str #",")
+          node-ip-map (parse-node-ips node-ips-str)
+          ;; Build port maps
+          tcp-port-map (if node-ip-map
+                         ;; Use explicit node IP mapping for TCP ports
+                         (into {} (for [[nid info] node-ip-map]
+                                    [nid (:port info)]))
+                         ;; Fall back to sequential port pattern
+                         (let [base-tcp-port (- tcp-port (Integer/parseInt (subs node-id 1)) -1)]
+                           (into {} (map-indexed (fn [idx id] 
+                                                   [id (+ base-tcp-port idx)]) 
+                                                 nodes))))
+          http-port-map (if node-ip-map
+                          ;; For HTTP, use the same pattern but with base ports 7001, 7002, 7003
+                          (let [sorted-nodes (sort nodes)
+                                base-port 7001]
+                            (into {} (map-indexed (fn [idx id]
+                                                    [id (+ base-port idx)])
+                                                  sorted-nodes)))
+                          ;; Fall back to sequential port pattern
+                          (let [base-http-port (- http-port (Integer/parseInt (subs node-id 1)) -1)]
+                            (into {} (map-indexed (fn [idx id] 
+                                                    [id (+ base-http-port idx)]) 
+                                                  nodes))))
+          tcp-host-map (if node-ip-map
+                         ;; Use explicit node IP mapping for TCP hosts
+                         (into {} (for [[nid info] node-ip-map]
+                                    [nid (:host info)]))
+                         ;; Fall back to localhost
+                         (into {} (for [id nodes] [id "localhost"])))]
+      {:node-id node-id
+       :tcp-port tcp-port
+       :http-port http-port
+       :tcp-host tcp-host
+       :http-host http-host
+       :nodes nodes
+       :tcp-port-map tcp-port-map
+       :http-port-map http-port-map
+       :tcp-host-map tcp-host-map})))
 
 (defn- register-shutdown-hook
   "Register JVM shutdown hook."
@@ -723,8 +928,9 @@
    Usage: node-id tcp-port http-port nodes
    Example: n1 9001 7001 n1,n2,n3"
   [& args]
-  (let [{:keys [node-id tcp-port http-port nodes]} (parse-command-line-args args)
-        shutdown-fn (start-node node-id tcp-port http-port nodes)]
+  (let [{:keys [node-id tcp-port http-port tcp-host http-host nodes tcp-port-map http-port-map tcp-host-map]} (parse-command-line-args args)
+        shutdown-fn (start-node node-id tcp-port http-port nodes tcp-port-map http-port-map 
+                                :tcp-host tcp-host :http-host http-host :tcp-host-map tcp-host-map)]
     
     ;; Register shutdown hook
     (register-shutdown-hook shutdown-fn)

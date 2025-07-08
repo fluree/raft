@@ -1,7 +1,7 @@
 (ns jepsen-raft.util
   "Shared utilities for Jepsen Raft tests"
   (:require [clojure.tools.logging :refer [info debug]]
-            [clojure.core.async :as async :refer [<! >! go go-loop]]))
+            [jepsen-raft.config :as config]))
 
 ;; =============================================================================
 ;; Configuration Constants
@@ -61,6 +61,7 @@
     Function that processes operations and returns results"
   [state-atom]
   (fn [entry _raft-state]
+    (debug "State machine received entry:" entry)
     (let [{:keys [op key value old new]} entry]
       (cond
         ;; Handle nil or missing op
@@ -78,11 +79,16 @@
         (ok-result (get @state-atom key))
         
         (= op :cas)
-        (if (= (get @state-atom key) old)
-          (do
-            (swap! state-atom assoc key new)
-            (ok-result))
-          (fail-result))
+        (let [current-value (get @state-atom key)]
+          (debug "CAS operation: key=" key "old=" old "new=" new "current-value=" current-value "state=" @state-atom)
+          (if (= current-value old)
+            (do
+              (swap! state-atom assoc key new)
+              (debug "CAS succeeded: key=" key "old=" old "new=" new "new-state=" @state-atom)
+              (ok-result))
+            (let [failure-result (fail-result :cas-failed)]
+              (debug "CAS failed: key=" key "expected=" old "actual=" current-value "equal?=" (= current-value old) "returning=" failure-result)
+              failure-result)))
           
         (= op :delete)
         (do
@@ -95,62 +101,21 @@
             (fail-result (str "Unknown operation: " op)))))))
 
 ;; =============================================================================
-;; RPC Utilities
-;; =============================================================================
-
-(defn create-async-rpc-router
-  "Creates an async RPC message router with simulated network delays.
-  
-  Args:
-    nodes-registry: Atom containing map of node-id -> node-data
-    max-delay-ms: Maximum network delay to simulate (default 5ms)
-    
-  Returns:
-    Function that routes RPC messages between nodes"
-  ([nodes-registry] 
-   (create-async-rpc-router nodes-registry (:rpc-delay-max-ms default-test-params)))
-  ([nodes-registry max-delay-ms]
-   (fn [from-node to-node message callback]
-     (if-let [target-node (get @nodes-registry to-node)]
-       (go
-         ;; Simulate network delay
-         (<! (async/timeout (rand-int max-delay-ms)))
-         (>! (:rpc-chan target-node) 
-             {:from from-node 
-              :message message 
-              :callback callback}))
-       ;; Node not found
-       (when callback 
-         (callback {:error :node-not-found :target to-node}))))))
-
-(defn create-rpc-sender
-  "Creates an RPC sender function that handles multiple argument formats.
-  
-  This handles the Raft library's different calling conventions for RPC.
-  
-  Args:
-    node-id: ID of the sending node
-    router-fn: Function to route messages (from create-async-rpc-router)
-    
-  Returns:
-    Function that can handle both 3 and 5 argument RPC calls"
-  [node-id router-fn]
-  (fn [& args]
-    (let [[target-node message callback] 
-          (case (count args)
-            3 args  ; Direct 3-arg call
-            5 [(second args)                    ; Extract from 5-arg call
-               [(nth args 2) (nth args 3)]     ; Combine args 2&3 as message
-               (last args)]                    ; Callback is last
-            ;; Invalid argument count
-            (throw (IllegalArgumentException. 
-                    (str "Invalid RPC args count: " (count args) 
-                         ", expected 3 or 5"))))]
-      (router-fn node-id target-node message callback))))
-
-;; =============================================================================
 ;; Node Management
 ;; =============================================================================
+
+(defn node->ports
+  "Map node name to TCP and HTTP ports."
+  [node]
+  {:tcp (get config/tcp-ports node 9000)
+   :http (get config/http-ports node 7000)})
+
+(defn log-node-operation
+  "Standardized logging for node operations"
+  [operation node & [details]]
+  (if details
+    (info (str operation " node " node ": " details))
+    (info (str operation " node " node))))
 
 (defn default-raft-config
   "Creates a default Raft configuration map.
@@ -181,16 +146,29 @@
     rpc-sender-fn (assoc :send-rpc-fn rpc-sender-fn)))
 
 ;; =============================================================================
-;; Test Operation Generators
+;; Test Operations
 ;; =============================================================================
 
 (defn random-key
-  "Returns a random key from the standard test keys"
+  "Generate a random test key from configured test keys."
   []
-  (rand-nth (:test-keys default-test-params)))
+  (rand-nth config/test-keys))
 
 (defn random-value
-  "Returns a random value in the standard test range"
+  "Generate a random test value within configured range."
   []
-  (rand-int (:value-range default-test-params)))
+  (rand-int config/value-range))
 
+(defn generate-test-command
+  "Generate a random test command.
+  
+  Returns a map with :op and appropriate parameters for the operation."
+  []
+  (let [op-type (rand-nth [:write :read :cas :delete])
+        key (name (random-key))
+        value (random-value)]
+    (case op-type
+      :write {:op "write" :key key :value value}
+      :read {:op "read" :key key}
+      :cas {:op "cas" :key key :old (random-value) :new value}
+      :delete {:op "delete" :key key})))

@@ -1,0 +1,36 @@
+FROM clojure:temurin-21-tools-deps
+
+# Install required system packages
+RUN apt-get update && apt-get install -y \
+    curl \
+    netcat-traditional \
+    net-tools \
+    iptables \
+    iproute2 \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# Copy the raft parent directory (includes both raft library and jepsen-raft)
+COPY . /app/raft
+
+# Set the working directory to jepsen-raft
+WORKDIR /app/raft/jepsen-raft
+
+# Download dependencies
+RUN clojure -P
+
+# Create log directory
+RUN mkdir -p /tmp/jepsen-raft-network
+
+# Expose ports for TCP (Raft) and HTTP (client)
+EXPOSE 9001 9002 9003 7001 7002 7003
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${HTTP_PORT:-7001}/debug || exit 1
+
+# Default command - will be overridden by docker-compose
+CMD ["clojure", "-M", "-m", "jepsen-raft.raft-node"]

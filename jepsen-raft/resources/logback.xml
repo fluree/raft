@@ -13,6 +13,8 @@
     
     <!-- Our namespaces with more detail -->
     <logger name="jepsen-raft.tests.netasync" level="DEBUG"/>
+    <logger name="jepsen-raft.util" level="DEBUG"/>
+    <logger name="jepsen-raft.model" level="DEBUG"/>
     <logger name="fluree.raft" level="INFO"/>
     <logger name="net.async" level="INFO"/>
     
