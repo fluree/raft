@@ -6,27 +6,29 @@ help: ## Show this help message
 
 .PHONY: test
 test: ## Run net.async test (non-dockerized)
-	clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3
+	clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5
 
 .PHONY: test-docker
 test-docker: ## Run dockerized net.async test with network partition nemesis
-	clojure -M:netasync-docker test --time-limit $${TIME:-60} --nodes n1,n2,n3
+	clojure -M:netasync-docker test --time-limit $${TIME:-60} --nodes n1,n2,n3,n4,n5
 
 .PHONY: test-docker-minimal
 test-docker-minimal: ## Run minimal dockerized test without nemesis
-	clojure -M:netasync-docker test --minimal --time-limit $${TIME:-30} --nodes n1,n2,n3
+	clojure -M:netasync-docker test --minimal --time-limit $${TIME:-30} --nodes n1,n2,n3,n4,n5
 
 .PHONY: performance
 performance: ## Run performance stress test
 	clojure -M:performance escalating
 
 .PHONY: start-nodes
-start-nodes: ## Start net.async Raft nodes (n1, n2, n3)
+start-nodes: ## Start net.async Raft nodes (n1, n2, n3, n4, n5)
 	@echo "🚀 Starting net.async Raft nodes..."
 	@mkdir -p logs
-	@clojure -M -m jepsen-raft.raft-node n1 9001 7001 n1,n2,n3 > logs/n1.log 2>&1 & echo "Started n1 (PID: $$!)"
-	@clojure -M -m jepsen-raft.raft-node n2 9002 7002 n1,n2,n3 > logs/n2.log 2>&1 & echo "Started n2 (PID: $$!)"
-	@clojure -M -m jepsen-raft.raft-node n3 9003 7003 n1,n2,n3 > logs/n3.log 2>&1 & echo "Started n3 (PID: $$!)"
+	@clojure -M -m jepsen-raft.raft-node n1 9001 7001 n1,n2,n3,n4,n5 > logs/n1.log 2>&1 & echo "Started n1 (PID: $$!)"
+	@clojure -M -m jepsen-raft.raft-node n2 9002 7002 n1,n2,n3,n4,n5 > logs/n2.log 2>&1 & echo "Started n2 (PID: $$!)"
+	@clojure -M -m jepsen-raft.raft-node n3 9003 7003 n1,n2,n3,n4,n5 > logs/n3.log 2>&1 & echo "Started n3 (PID: $$!)"
+	@clojure -M -m jepsen-raft.raft-node n4 9004 7004 n1,n2,n3,n4,n5 > logs/n4.log 2>&1 & echo "Started n4 (PID: $$!)"
+	@clojure -M -m jepsen-raft.raft-node n5 9005 7005 n1,n2,n3,n4,n5 > logs/n5.log 2>&1 & echo "Started n5 (PID: $$!)"
 	@echo "⏳ Waiting for nodes to start..."
 	@sleep 5
 	@echo "🔍 Checking node health..."
@@ -41,7 +43,7 @@ stop-nodes: ## Stop all net.async Raft nodes
 .PHONY: check-nodes
 check-nodes: ## Check if net.async nodes are running and healthy
 	@echo "📊 Node Status:"
-	@for port in 7001 7002 7003; do \
+	@for port in 7001 7002 7003 7004 7005; do \
 		node=n$$(($$port - 7000)); \
 		if curl -s --connect-timeout 2 http://localhost:$$port/health >/dev/null 2>&1; then \
 			health=$$(curl -s http://localhost:$$port/health); \

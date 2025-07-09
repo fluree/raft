@@ -20,7 +20,7 @@
 
 (def docker-initial-wait-ms
   "Initial wait time for Docker containers to start."
-  15000)
+  10000)
 
 ;; Retry configuration
 (def max-retries

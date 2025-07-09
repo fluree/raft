@@ -68,7 +68,12 @@
 (defn wait-for-node-ready
   "Wait for a node to be ready"
   [node port timeout-ms]
-  (wait-for-ready
-    #(boolean (:node-ready (check-health node port)))
-    timeout-ms
-    500))
+  (let [start-time (System/currentTimeMillis)]
+    (wait-for-ready
+      #(let [health-result (check-health node port)]
+         (when (nil? health-result)
+           (when (< (mod (- (System/currentTimeMillis) start-time) 10000) 500)
+             (println "Waiting for" node "health check response...")))
+         (boolean (:node-ready health-result)))
+      timeout-ms
+      500)))

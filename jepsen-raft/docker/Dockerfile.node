@@ -26,11 +26,11 @@ RUN clojure -P
 RUN mkdir -p /tmp/jepsen-raft-network
 
 # Expose ports for TCP (Raft) and HTTP (client)
-EXPOSE 9001 9002 9003 7001 7002 7003
+EXPOSE 9001 9002 9003 9004 9005 7001 7002 7003 7004 7005
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${HTTP_PORT:-7001}/debug || exit 1
+HEALTHCHECK --interval=5s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${HTTP_PORT:-7001}/health || exit 1
 
 # Default command - will be overridden by docker-compose
 CMD ["clojure", "-M", "-m", "jepsen-raft.raft-node"]

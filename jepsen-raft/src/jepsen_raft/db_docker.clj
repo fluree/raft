@@ -25,10 +25,30 @@
     result))
 
 (defn- wait-for-node-ready
-  "Wait for a dockerized node to be ready."
+  "Wait for a dockerized node to be ready using Docker's health check."
   [node timeout-ms]
-  (let [{:keys [http]} (util/node->ports node)]
-    (http-client/wait-for-node-ready node http timeout-ms)))
+  (let [container-name (str "raft-" node)
+        deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (let [result (sh "docker" "inspect" "--format" "{{.State.Health.Status}}" container-name)
+            health-status (clojure.string/trim (:out result))]
+        (cond
+          (= "healthy" health-status)
+          (do
+            (info "Container" container-name "is healthy")
+            true)
+          
+          (> (System/currentTimeMillis) deadline)
+          (do
+            (warn "Container" container-name "health check timed out. Status:" health-status)
+            false)
+          
+          :else
+          (do
+            (when (= "starting" health-status)
+              (info "Container" container-name "is still starting..."))
+            (Thread/sleep 2000)
+            (recur)))))))
 
 (defn- start-dockerized-cluster!
   "Start the dockerized net.async cluster."
@@ -46,13 +66,19 @@
   (info "Starting containers...")
   (docker-exec "up" "-d")
   
-  ;; Wait for all nodes to be ready
-  (info "Waiting for nodes to be ready...")
-  (Thread/sleep config/docker-initial-wait-ms) ; Initial wait for containers to start
+  ;; Wait for all nodes to be ready using Docker's health checks
+  (info "Waiting for all containers to be healthy...")
+  (Thread/sleep 5000) ; Give containers initial time to start
   
-  (doseq [node ["n1" "n2" "n3"]]
-    (when-not (wait-for-node-ready node config/node-ready-timeout-ms)
-      (throw (ex-info (str "Node " node " failed to start") {:node node})))))
+  ;; Check all nodes for health status
+  (doseq [node (sort (keys config/tcp-ports))]
+    (info "Checking health status for node" node)
+    (if (wait-for-node-ready node config/node-ready-timeout-ms)
+      (info "Node" node "is ready")
+      (do
+        (warn "Node" node "failed health check, checking container logs...")
+        (docker-exec "logs" "--tail" "50" (str "raft-" node))
+        (throw (ex-info (str "Node " node " failed to become healthy") {:node node}))))))
 
 (defn- stop-dockerized-cluster!
   "Stop the dockerized net.async cluster."
@@ -69,7 +95,7 @@
                  (slurp (str "http://localhost:" http "/debug"))
                  true
                  (catch Exception _ false)))
-            ["n1" "n2" "n3"])
+            (keys config/tcp-ports))
     (catch Exception e
       (warn "Health check failed:" (.getMessage e))
       false)))
