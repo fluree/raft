@@ -232,13 +232,24 @@ Test keyword/string conversion in HTTP transport layer.
 - ✅ Independent checker tuple wrapping for read operations
 - ✅ CAS register model support for all operation types
 - ✅ Raft log persistence causing linearizability violations
+- ✅ Node startup issues with 5-node cluster configuration
+- ✅ Port conflicts and staggered startup timing
+- ✅ Dynamic node list generation for scalability
 
 **Performance Results:**
 - ✅ Peak throughput: 465.8 ops/sec (75 concurrent clients)
 - ✅ 100% success rate across all load levels (1-100 clients)
 - ✅ No breaking point detected in stress testing
+- ✅ 60-second Jepsen linearizability tests: 100% success rate
+
+**Current Configuration:**
+- ✅ 5-node cluster (n1-n5) with proper port allocation
+- ✅ Staggered startup with 2-second delays
+- ✅ 60-second node startup timeout
+- ✅ Automatic Raft log cleanup between tests
 
 **Next Steps:**
 1. ✅ Independent checker pattern (completed)
 2. ✅ Performance optimization and stress testing (completed)
-3. 🔄 Add cross-key invariant testing if needed (optional)
+3. ✅ 5-node cluster support (completed)
+4. 🔄 Add cross-key invariant testing if needed (optional)

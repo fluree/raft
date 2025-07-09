@@ -16,7 +16,7 @@
   "Start a local net.async Raft node."
   [node]
   ;; Stagger node startup to avoid race conditions
-  (let [node-index (case node "n1" 0 "n2" 1 "n3" 2 0)
+  (let [node-index (case node "n1" 0 "n2" 1 "n3" 2 "n4" 3 "n5" 4 0)
         startup-delay (* node-index 2000)]
     (when (> startup-delay 0)
       (info "Delaying startup of" node "by" startup-delay "ms")
@@ -30,8 +30,8 @@
         ;; Ensure log directory exists
         _ (io/make-parents log-file)
         
-        ;; Build command  
-        nodes       "n1,n2,n3"
+        ;; Build command with all available nodes 
+        nodes       (clojure.string/join "," (keys config/tcp-ports))
         ;; Use shell wrapper to ensure proper command execution
         cmd         ["sh" "-c" 
                      (str "clojure -M -m jepsen-raft.raft-node " 
@@ -68,8 +68,8 @@
     ;; Wait for node to be ready
     (Thread/sleep 2000)
     
-    ;; Check if node started successfully using http-client
-    (if (http-client/wait-for-node-ready node http 30000)
+    ;; Check if node started successfully using http-client with longer timeout
+    (if (http-client/wait-for-node-ready node http 60000)
       (do
         (info "Net.async node" node "started successfully")
         :started)

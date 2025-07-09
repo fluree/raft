@@ -57,13 +57,17 @@
   "TCP port mapping for Raft nodes."
   {"n1" 9001
    "n2" 9002
-   "n3" 9003})
+   "n3" 9003
+   "n4" 9004
+   "n5" 9005})
 
 (def http-ports
   "HTTP port mapping for client commands."
   {"n1" 7001
    "n2" 7002
-   "n3" 7003})
+   "n3" 7003
+   "n4" 7004
+   "n5" 7005})
 
 ;; File paths
 (def log-directory

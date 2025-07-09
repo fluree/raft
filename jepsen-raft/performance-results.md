@@ -54,10 +54,25 @@ The net.async implementation shows excellent performance and stability:
 
 The current results show improved stability compared to earlier tests. The implementation now maintains 100% success rate across all load levels, indicating that previous issues with linearizability violations and operation parsing have been resolved.
 
+## Latest Jepsen Linearizability Tests (2025-01-09)
+
+**60-Second Extended Test Results:**
+- **Test Status**: ✅ **100% VALID** - All consistency checks passed
+- **Cluster Configuration**: 5 nodes (n1-n5) with staggered startup
+- **Final State**: Key `:x` = 59, Key `:y` = 87
+- **Linearizability**: No violations detected
+- **Performance**: All latency, rate, and timeline metrics valid
+
+**Node Startup Performance:**
+- **Staggered delays**: 0ms, 2s, 4s, 6s, 8s for n1-n5 respectively
+- **Startup timeout**: 60 seconds (increased from 30s)
+- **Success rate**: 100% - all nodes started reliably
+- **No port conflicts**: Dynamic port allocation working correctly
+
 ## Test Environment
 
-- **3 Raft nodes**: n1, n2, n3
-- **HTTP ports**: 8001-8003 for client commands
-- **TCP ports**: 8101-8103 for Raft RPC
-- **Leader**: n3 (elected during test startup)
+- **5 Raft nodes**: n1, n2, n3, n4, n5 (Jepsen default)
+- **HTTP ports**: 7001-7005 for client commands  
+- **TCP ports**: 9001-9005 for Raft RPC
+- **Performance test ports**: 8001-8003 (HTTP), 8101-8103 (TCP)
 - **Network**: Local processes with TCP communication

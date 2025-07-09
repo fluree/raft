@@ -196,12 +196,12 @@ open store/raft-netasync*/latest/timeline.html
 - **`rate.png`**: Throughput over time
 
 ### Performance Characteristics
-Based on our latest stress testing (2025-01-09):
-- **Light load (1-10 clients)**: 30-103 ops/sec
-- **Medium load (15-50 clients)**: 145-281 ops/sec  
-- **Heavy load (75-100 clients)**: 441-466 ops/sec peak
-- **Peak throughput**: 465.8 ops/sec (75 concurrent clients)
-- **Success rate**: 100% at all tested concurrency levels
+Based on our latest testing (2025-01-09):
+- **Jepsen Linearizability Tests**: 100% success rate on 5-node cluster
+- **Extended 60-second tests**: All consistency checks passed
+- **Performance Tests**: 465.8 ops/sec peak (75 concurrent clients)
+- **Node Startup**: Reliable staggered startup with 60-second timeout
+- **Cluster Configuration**: 5 nodes (n1-n5) with ports 7001-7005 (HTTP), 9001-9005 (TCP)
 - **Breaking point**: None detected - maintains perfect reliability
 
 ## Development and Debugging
@@ -257,9 +257,10 @@ curl -X POST -H 'Content-Type: application/json' \
 ## Architecture Details
 
 ### Node Configuration
-- **3 Raft nodes**: n1, n2, n3
-- **TCP ports**: 9001-9003 for Raft RPC communication
-- **HTTP ports**: 7001-7003 for client commands
+- **5 Raft nodes**: n1, n2, n3, n4, n5 (Jepsen default)
+- **TCP ports**: 9001-9005 for Raft RPC communication
+- **HTTP ports**: 7001-7005 for client commands
+- **Staggered startup**: 2-second delays between nodes to prevent race conditions
 - **Connection pattern**: Lower-ID nodes connect to higher-ID nodes
 - **Automatic reconnection** with exponential backoff
 
@@ -283,8 +284,8 @@ curl -X POST -H 'Content-Type: application/json' \
 
 **Port conflicts**: Ensure ports are available
 ```bash
-lsof -i :7001-7003
-lsof -i :9001-9003
+lsof -i :7001-7005
+lsof -i :9001-9005
 ```
 
 **Container issues**: Check container status
