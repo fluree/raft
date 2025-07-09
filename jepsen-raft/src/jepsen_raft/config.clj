@@ -44,6 +44,14 @@
   "Default rate for staggering operations in tests."
   (/ 1 50))
 
+(def default-concurrency
+  "Default number of concurrent client threads."
+  6)
+
+(def default-time-limit
+  "Default test duration in seconds."
+  60)
+
 ;; Network configuration
 (def tcp-ports
   "TCP port mapping for Raft nodes."

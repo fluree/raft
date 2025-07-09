@@ -5,13 +5,15 @@
                     [generator :as gen]
                     [nemesis :as nemesis]
                     [tests :as tests]
-                    [os :as os]]
+                    [os :as os]
+                    [independent :as independent]]
             [jepsen.checker.timeline :as timeline]
             [jepsen-raft.db :as netasync-db]
             [jepsen-raft.client :as netasync-client]
             [jepsen-raft.operations :as ops]
             [jepsen-raft.config :as config]
-            [jepsen-raft.model :as raft-model]))
+            [jepsen-raft.model :as raft-model]
+            [knossos.model :as model]))
 
 ;; Use operations from shared namespace
 (def ^:private read-op ops/read-op)
@@ -32,15 +34,19 @@
             :client    client
             :nemesis   nemesis/noop
             :ssh       {:dummy? true}
+            :concurrency config/default-concurrency
             :checker   (checker/compose
                          {:perf     (checker/perf)
                           :timeline (timeline/html)
-                          :linear   (checker/linearizable
-                                      {:model (raft-model/multi-register)})})
-            :generator (->> (gen/mix [read-op
-                                      write-op
-                                      cas-op])
-                            (gen/stagger config/default-stagger-rate)
+                          :linear   (independent/checker
+                                      (checker/linearizable 
+                                        {:model (model/cas-register)}))})
+            :generator (->> (independent/concurrent-generator
+                              3
+                              config/test-keys
+                              (fn [_k]
+                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
+                                     (gen/stagger config/default-stagger-rate))))
                             (gen/nemesis nil)
                             (gen/time-limit (:time-limit opts)))})))
 

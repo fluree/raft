@@ -96,6 +96,13 @@
   db/DB
   (setup! [_ _test node]
     (info "Setting up net.async Raft node" node)
+    ;; Clean up any existing Raft logs before starting
+    (let [log-dir (str config/log-directory node "/")]
+      (when (.exists (io/file log-dir))
+        (info "Cleaning up existing Raft logs for" node)
+        (doseq [file (.listFiles (io/file log-dir))
+                :when (.isFile file)]
+          (.delete file))))
     (start-local-node! node))
   
   (teardown! [_ _test node]

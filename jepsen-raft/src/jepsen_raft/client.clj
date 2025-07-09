@@ -1,7 +1,8 @@
 (ns jepsen-raft.client
   "Client for Raft test."
   (:require [clojure.tools.logging :refer [error]]
-            [jepsen [client :as client]]
+            [jepsen [client :as client]
+                    [independent :as independent]]
             [jepsen-raft.config :as config]
             [jepsen-raft.http-client :as http-client]))
 
@@ -60,9 +61,11 @@
   
   (invoke! [_this _test op]
     (try
-      (let [result (case (:f op)
+      ;; For independent checker, the Op record contains [:key operation-value] in its :value field
+      (let [[k operation-value] (:value op)
+            result (case (:f op)
                      :read
-                     (let [cmd-result (send-command! node {:op :read :key (:key op)})]
+                     (let [cmd-result (send-command! node {:op :read :key k})]
                        (cond
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
@@ -70,17 +73,17 @@
                      
                      :write
                      (let [cmd-result (send-command! node {:op :write 
-                                                           :key (:key op)
-                                                           :value (:value op)})]
+                                                           :key k
+                                                           :value operation-value})]
                        (cond
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
                          :else {}))
                      
                      :cas
-                     (let [[old new] (:value op)
+                     (let [[old new] operation-value
                            cmd-result (send-command! node {:op :cas
-                                                           :key (:key op)
+                                                           :key k
                                                            :old old
                                                            :new new})]
                        (cond
@@ -89,7 +92,7 @@
                          :else {}))
                      
                      :delete
-                     (let [cmd-result (send-command! node {:op :delete :key (:key op)})]
+                     (let [cmd-result (send-command! node {:op :delete :key k})]
                        (cond
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
@@ -101,7 +104,7 @@
         (if (:error result)
           (assoc op :type :fail :error (:error result))
           (case (:f op)
-            :read (assoc op :type :ok :value (:value result))
+            :read (assoc op :type :ok :value (independent/tuple k (:value result)))
             (assoc op :type :ok))))
       
       (catch Exception ex

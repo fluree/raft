@@ -5,13 +5,16 @@
                     [generator :as gen]
                     [nemesis :as nemesis]
                     [tests :as tests]
-                    [os :as os]]
+                    [os :as os]
+                    [independent :as independent]]
             [jepsen.checker.timeline :as timeline]
             [jepsen-raft.db-docker :as docker-db]
             [jepsen-raft.client :as netasync-client]
             [jepsen-raft.nemesis-docker :as docker-nemesis]
             [jepsen-raft.operations :as ops]
-            [jepsen-raft.model :as raft-model]))
+            [jepsen-raft.model :as raft-model]
+            [jepsen-raft.config :as config]
+            [knossos.model :as model]))
 
 ;; Use operations from shared namespace
 (def ^:private read-op ops/read-op)
@@ -38,13 +41,19 @@
             :client    client
             :nemesis   nemesis
             :ssh       {:dummy? true}
+            :concurrency config/default-concurrency
             :checker   (checker/compose
                          {:perf     (checker/perf)
                           :timeline (timeline/html)
-                          :linear   (checker/linearizable
-                                      {:model (raft-model/multi-register)})})
-            :generator (->> (gen/mix [read-op write-op cas-op])
-                            (gen/stagger 1/10)
+                          :linear   (independent/checker
+                                      (checker/linearizable 
+                                        {:model (model/cas-register)}))})
+            :generator (->> (independent/concurrent-generator
+                              3
+                              config/test-keys
+                              (fn [_k]
+                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
+                                     (gen/stagger config/default-stagger-rate))))
                             (gen/nemesis
                               (cycle
                                 [(gen/sleep 10)
@@ -70,13 +79,19 @@
             :client    client
             :nemesis   nemesis/noop
             :ssh       {:dummy? true}
+            :concurrency config/default-concurrency
             :checker   (checker/compose
                          {:perf     (checker/perf)
                           :timeline (timeline/html)
-                          :linear   (checker/linearizable
-                                      {:model (raft-model/multi-register)})})
-            :generator (->> (gen/mix [read-op write-op cas-op])
-                            (gen/stagger 1/10)  ; 100ms between ops
+                          :linear   (independent/checker
+                                      (checker/linearizable 
+                                        {:model (model/cas-register)}))})
+            :generator (->> (independent/concurrent-generator
+                              3
+                              config/test-keys
+                              (fn [_k]
+                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
+                                     (gen/stagger config/default-stagger-rate))))
                             (gen/nemesis nil)  ; No nemesis operations
                             (gen/time-limit (:time-limit opts)))})))
 
