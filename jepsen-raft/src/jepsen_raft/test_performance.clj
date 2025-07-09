@@ -26,9 +26,9 @@
 ;; Configuration
 (def ^:private node-ports
   "Map of node names to their HTTP ports"
-  {"n1" 7001
-   "n2" 7002
-   "n3" 7003})
+  {"n1" 8001
+   "n2" 8002
+   "n3" 8003})
 
 (def ^:private nodes ["n1" "n2" "n3"])
 

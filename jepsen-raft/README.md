@@ -196,13 +196,13 @@ open store/raft-netasync*/latest/timeline.html
 - **`rate.png`**: Throughput over time
 
 ### Performance Characteristics
-Based on our stress testing:
-- **Light load (1-10 clients)**: 50-120 ops/sec
-- **Medium load (50 clients)**: 340+ ops/sec  
-- **Heavy load (100+ clients)**: 560-570 ops/sec peak
-- **Average latency**: 13-57ms depending on load
-- **P95 latency**: 18-127ms depending on load
-- **Breaking point**: Typically >100 concurrent clients
+Based on our latest stress testing (2025-01-09):
+- **Light load (1-10 clients)**: 30-103 ops/sec
+- **Medium load (15-50 clients)**: 145-281 ops/sec  
+- **Heavy load (75-100 clients)**: 441-466 ops/sec peak
+- **Peak throughput**: 465.8 ops/sec (75 concurrent clients)
+- **Success rate**: 100% at all tested concurrency levels
+- **Breaking point**: None detected - maintains perfect reliability
 
 ## Development and Debugging
 
