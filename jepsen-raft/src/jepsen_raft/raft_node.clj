@@ -620,12 +620,13 @@
 
 (defn- forward-command-to-leader
   "Forward command to the leader node via HTTP."
-  [leader-id command port-map content-type]
+  [leader-id command port-map host-map content-type]
   (if-let [leader-port (get port-map leader-id)]
     (try
-      (log/info "Forwarding command" (:op command) "to leader" leader-id
-                "at port" leader-port)
-      (let [url (str "http://localhost:" leader-port "/command")
+      (let [leader-host (get host-map leader-id "localhost")]
+        (log/info "Forwarding command" (:op command) "to leader" leader-id
+                  "at" leader-host ":" leader-port)
+        (let [url (str "http://" leader-host ":" leader-port "/command")
             ;; Forward with same content-type as original request
             response (if (= content-type "application/octet-stream")
                        ;; Nippy format
@@ -653,7 +654,7 @@
             result)
           (do
             (log/warn "Leader forward failed with status" (:status response))
-            {:type :fail :error "Leader forward failed"})))
+            {:type :fail :error "Leader forward failed"}))))
       (catch Exception e
         (log/error e "Failed to forward command to leader")
         {:type :fail :error "Leader forward error"}))
@@ -672,7 +673,7 @@
 
 (defn- handle-command-request
   "Handle /command endpoint."
-  [raft-instance request port-map]
+  [raft-instance request port-map host-map]
   (let [content-type (get-in request [:headers "content-type"])
         command (prepare-command-from-request request)
         current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
@@ -683,7 +684,7 @@
 
       ;; We know who the leader is - forward to them
       (:leader current-state)
-      (serialize-response (forward-command-to-leader (:leader current-state) command port-map content-type) content-type)
+      (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map content-type) content-type)
 
       ;; No leader elected yet
       :else
@@ -697,11 +698,11 @@
 
 (defn- create-http-handler
   "Create Ring handler for HTTP interface."
-  [raft-instance server-id state-atom port-map]
+  [raft-instance server-id state-atom port-map host-map]
   (fn [request]
     (try
       (case (:uri request)
-        "/command" (handle-command-request raft-instance request port-map)
+        "/command" (handle-command-request raft-instance request port-map host-map)
         "/debug"   (handle-debug-request raft-instance server-id state-atom)
         "/health"  (let [current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
                      (response/response {:status "ok"
@@ -785,6 +786,14 @@
                     :host host
                     :join? false}))
 
+(defn- build-http-host-map
+  "Build HTTP host map from node IP mapping or fallback to localhost."
+  [node-ip-map nodes]
+  (if node-ip-map
+    ;; In Docker, nodes need to use container names to reach each other
+    (into {} (for [id nodes] [id id]))
+    (into {} (for [id nodes] [id "localhost"]))))
+
 (defn- cleanup-node-resources!
   "Clean up all node resources during shutdown."
   [http-server tcp-shutdown raft-instance]
@@ -823,7 +832,8 @@
         _ (setup-outbound-tcp-connections! node-id nodes tcp-port-map raft-instance tcp-host-map)
 
         ;; HTTP server setup
-        http-handler (create-http-handler raft-instance node-id state-atom http-port-map)
+        http-host-map (build-http-host-map tcp-host-map nodes)
+        http-handler (create-http-handler raft-instance node-id state-atom http-port-map http-host-map)
         http-app (create-http-app http-handler)
         http-server (start-http-server http-app http-port :host http-host)]
 
