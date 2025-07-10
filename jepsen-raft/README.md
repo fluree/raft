@@ -35,8 +35,14 @@ make test-docker-minimal
 
 ### Performance Testing
 ```bash
-# Run escalating load test to find cluster limits
+# Run escalating load test (auto-starts nodes)
 make performance
+
+# Test with 3 nodes instead of 5
+PERF_NODE_COUNT=3 make performance
+
+# Test up to 500 concurrent clients
+PERF_MAX_CLIENTS=500 make performance
 ```
 
 ## Test Suites Overview
@@ -73,9 +79,17 @@ We have **3 test suites**, each designed to validate different aspects of the Ra
 ### 3. Performance Stress Test (`test_performance.clj`)
 - **Command**: `make performance` or `clojure -M:performance`
 - **Purpose**: Identify cluster throughput limits and breaking points
+- **Key Features**:
+  - **Automatic node management**: Starts/stops nodes automatically (default)
+  - **Configurable cluster size**: 3 or 5 nodes via `PERF_NODE_COUNT`
+  - **Flexible load testing**: Up to 1000+ concurrent clients
 - **Test Modes**:
-  - **Escalating**: Automatically increases load from 1 to 100 concurrent clients
+  - **Escalating**: Automatically increases load until failure (default)
   - **Single**: Fixed load test with specified clients/commands
+- **Configuration Options**:
+  - `PERF_NODE_COUNT=3|5`: Number of nodes to test (default: 5)
+  - `PERF_MAX_CLIENTS=N`: Maximum concurrent clients (default: 100)
+  - `PERF_USE_EXISTING_NODES=true`: Use already-running nodes
 - **Metrics Tracked**:
   - Throughput (operations per second)
   - Response times (average, min, max, 95th percentile)
@@ -85,6 +99,7 @@ We have **3 test suites**, each designed to validate different aspects of the Ra
   - Capacity planning
   - Performance regression testing
   - Hardware sizing recommendations
+  - Comparing 3-node vs 5-node performance
 
 ### Common Test Characteristics
 All tests share these features:
@@ -195,14 +210,43 @@ open store/raft-netasync*/latest/timeline.html
 - **`latency-quantiles.png`**: Latency distribution
 - **`rate.png`**: Throughput over time
 
+### Performance Testing
+
+The performance test automatically manages node lifecycle and can be configured for different scenarios:
+
+```bash
+# Run with default 5-node cluster (auto-managed)
+make performance
+
+# Run with 3-node cluster
+PERF_NODE_COUNT=3 make performance
+
+# Test up to 500 concurrent clients
+PERF_MAX_CLIENTS=500 make performance
+
+# Use existing running nodes (manual management)
+make start-nodes  # Start nodes first
+PERF_USE_EXISTING_NODES=true make performance
+
+# Run specific single test (200 clients, 100 commands each)
+clojure -M:performance single 200 100
+```
+
+**Environment Variables:**
+- `PERF_NODE_COUNT`: Number of nodes to test (3 or 5, default: 5)
+- `PERF_MAX_CLIENTS`: Maximum concurrent clients for escalating test (default: 100)
+- `PERF_USE_EXISTING_NODES`: Set to "true" to use already-running nodes
+
+**Note**: The performance test automatically starts and stops nodes by default. Node logs are written to `/tmp/jepsen-raft-network/n*-perf.log` for debugging.
+
 ### Performance Characteristics
 Based on our latest testing (2025-01-09):
 - **Jepsen Linearizability Tests**: 100% success rate on 5-node cluster
-- **Extended 60-second tests**: All consistency checks passed
-- **Performance Tests**: 465.8 ops/sec peak (75 concurrent clients)
-- **Node Startup**: Reliable staggered startup with 60-second timeout
-- **Cluster Configuration**: 5 nodes (n1-n5) with ports 7001-7005 (HTTP), 9001-9005 (TCP)
-- **Breaking point**: None detected - maintains perfect reliability
+- **Extended 3-minute tests**: All consistency checks passed (99.95% expected CAS rejections)
+- **Performance Tests**: 315.6 ops/sec peak (100 concurrent clients on 5-node cluster)
+- **Node Startup**: Reliable staggered startup with built-in health checks
+- **Cluster Configuration**: Supports 3 or 5 nodes with ports 7001-7005 (HTTP), 9001-9005 (TCP)
+- **Breaking point**: None detected up to 100 clients - maintains perfect reliability
 
 ## Development and Debugging
 
@@ -217,7 +261,11 @@ make docker-up           # Start Docker cluster
 make docker-down         # Stop Docker cluster
 make docker-logs         # View container logs
 make docker-test-network # Test network partitions
-make performance         # Run performance test
+make performance         # Run performance test (auto-manages nodes)
+make start-nodes         # Start net.async nodes manually
+make stop-nodes          # Stop all running nodes
+make restart-nodes       # Restart nodes with fresh state
+make check-nodes         # Check node health status
 make lint                # Lint source code
 make clean               # Clean all test artifacts
 ```

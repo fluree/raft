@@ -4,8 +4,11 @@ help: ## Show this help message
 
 .DEFAULT_GOAL := help
 
+# Testing Targets
+# ==============
+
 .PHONY: test
-test: ## Run net.async test (non-dockerized)
+test: ## Run net.async test (requires manual node startup)
 	clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5
 
 .PHONY: test-docker
@@ -17,11 +20,14 @@ test-docker-minimal: ## Run minimal dockerized test without nemesis
 	clojure -M:netasync-docker test --minimal --time-limit $${TIME:-30} --nodes n1,n2,n3,n4,n5
 
 .PHONY: performance
-performance: ## Run performance stress test
+performance: ## Run performance stress test (auto-manages nodes)
 	clojure -M:performance escalating
 
+# Node Management Targets
+# ======================
+
 .PHONY: start-nodes
-start-nodes: ## Start net.async Raft nodes (n1, n2, n3, n4, n5)
+start-nodes: ## Start net.async Raft nodes manually
 	@echo "🚀 Starting net.async Raft nodes..."
 	@mkdir -p logs
 	@clojure -M -m jepsen-raft.raft-node n1 9001 7001 n1,n2,n3,n4,n5 > logs/n1.log 2>&1 & echo "Started n1 (PID: $$!)"
@@ -53,6 +59,10 @@ check-nodes: ## Check if net.async nodes are running and healthy
 		fi; \
 	done
 
+.PHONY: logs
+logs: ## Tail logs for all running nodes
+	@tail -f logs/*.log 2>/dev/null || echo "No log files found. Start nodes first with 'make start-nodes'"
+
 .PHONY: restart-nodes
 restart-nodes: ## Restart all net.async nodes with fresh state
 	@echo "🔄 Restarting net.async nodes with fresh state..."
@@ -60,6 +70,9 @@ restart-nodes: ## Restart all net.async nodes with fresh state
 	@sleep 2
 	@rm -rf /tmp/jepsen-raft-network/
 	@make --silent start-nodes
+
+# Docker Targets
+# =============
 
 .PHONY: docker-build
 docker-build: ## Build Docker images for net.async testing
@@ -81,6 +94,8 @@ docker-logs: ## Show logs from net.async Docker containers
 docker-test-network: ## Test network partition scenarios
 	cd docker && ./test-network-partition.sh test-scenario
 
+# Utility Targets
+# ==============
 
 .PHONY: lint
 lint: ## Lint source code with clj-kondo
@@ -88,7 +103,10 @@ lint: ## Lint source code with clj-kondo
 
 .PHONY: clean
 clean: ## Remove all test results and temporary files
-	rm -rf store/
-	rm -rf /tmp/jepsen-raft-network/
-	pkill -f "jepsen-raft.raft-node" || true
-	docker-compose -f docker/docker-compose.yml down -v 2>/dev/null || true
+	@echo "🧹 Cleaning up test artifacts..."
+	@rm -rf store/
+	@rm -rf /tmp/jepsen-raft-network/
+	@rm -rf logs/
+	@pkill -f "jepsen-raft.raft-node" || true
+	@docker-compose -f docker/docker-compose.yml down -v 2>/dev/null || true
+	@echo "✅ Cleanup complete"

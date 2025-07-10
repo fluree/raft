@@ -14,12 +14,15 @@
   [request-fn url opts]
   (try
     (request-fn url (merge {:socket-timeout 2000
-                           :connection-timeout 1000
-                           :throw-exceptions false
-                           :headers {"Content-Type" "application/json"}}
-                          opts))
+                            :connection-timeout 1000
+                            :throw-exceptions false
+                            :headers {"Content-Type" "application/json"}}
+                           opts))
     (catch java.net.SocketTimeoutException _ex
       {:status 504 :error :timeout})
+    (catch java.net.ConnectException _ex
+      ;; Connection refused is expected during startup, don't log stack trace
+      {:status 503 :error :connection-refused})
     (catch Exception ex
       (log/warn ex "HTTP request failed" url)
       {:status 503 :error :connection-failed})))
@@ -28,8 +31,8 @@
   "Send a command to a Raft node via HTTP"
   [node port command timeout-ms]
   (let [url (node->url node port "/command")
-        response (with-timeout 
-                   http/post 
+        response (with-timeout
+                   http/post
                    url
                    {:body (json/write-str command)
                     :socket-timeout timeout-ms})]
@@ -68,12 +71,13 @@
 (defn wait-for-node-ready
   "Wait for a node to be ready"
   [node port timeout-ms]
-  (let [start-time (System/currentTimeMillis)]
+  (let [start-time (System/currentTimeMillis)
+        logged-waiting? (atom false)]
     (wait-for-ready
-      #(let [health-result (check-health node port)]
-         (when (nil? health-result)
-           (when (< (mod (- (System/currentTimeMillis) start-time) 10000) 500)
-             (println "Waiting for" node "health check response...")))
-         (boolean (:node-ready health-result)))
-      timeout-ms
-      500)))
+     #(let [health-result (check-health node port)]
+        (when (and (nil? health-result) (not @logged-waiting?))
+          (log/info "Waiting for" node "to become available...")
+          (reset! logged-waiting? true))
+        (boolean (:node-ready health-result)))
+     timeout-ms
+     500)))
