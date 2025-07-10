@@ -1,7 +1,8 @@
 (ns jepsen-raft.util
   "Shared utilities for Jepsen Raft tests"
   (:require [clojure.tools.logging :refer [info debug]]
-            [jepsen-raft.config :as config]))
+            [jepsen-raft.config :as config]
+            [jepsen-raft.nodeconfig :as nodes]))
 
 ;; =============================================================================
 ;; Configuration Constants
@@ -105,10 +106,21 @@
 ;; =============================================================================
 
 (defn node->ports
-  "Map node name to TCP and HTTP ports."
+  "Map node name to TCP and HTTP ports.
+   Delegates to centralized nodes configuration."
   [node]
-  {:tcp (get config/tcp-ports node 9000)
-   :http (get config/http-ports node 7000)})
+  (or (nodes/node->ports node)
+      {:tcp 9000 :http 7000}))  ; Fallback for unknown nodes
+
+(defn check-port-available
+  "Check if a port is available for binding."
+  [port]
+  (try
+    (let [socket (java.net.ServerSocket. port)]
+      (.close socket)
+      true)
+    (catch java.net.BindException _
+      false)))
 
 (defn log-node-operation
   "Standardized logging for node operations"

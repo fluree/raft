@@ -1,11 +1,12 @@
 (ns jepsen-raft.db-docker
   "Database setup for dockerized Raft test with Jepsen integration."
-  (:require [clojure.tools.logging :refer [info warn]]
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :refer [info warn]]
             [clojure.java.shell :refer [sh]]
             [jepsen [db :as db]]
             [jepsen-raft.config :as config]
             [jepsen-raft.util :as util]
-            [jepsen-raft.http-client :as http-client]))
+            [jepsen-raft.nodeconfig :as nodes]))
 
 ;; Synchronization for Docker container lifecycle
 (def ^:private docker-setup-lock (Object.))
@@ -50,10 +51,29 @@
             (Thread/sleep 2000)
             (recur)))))))
 
+(defn- check-ports-available
+  "Check if all required ports are available."
+  []
+  (let [docker-nodes (nodes/get-nodes :docker)] ; Get nodes from centralized config
+    (doseq [node docker-nodes]
+      (let [{:keys [tcp http]} (nodes/node->ports node)]
+        (when-not (util/check-port-available tcp)
+          (throw (ex-info (str "TCP port " tcp " for node " node " is already in use. "
+                               "Please stop any conflicting services.")
+                          {:node node :port tcp :type :tcp})))
+        (when-not (util/check-port-available http)
+          (throw (ex-info (str "HTTP port " http " for node " node " is already in use. "
+                               "Please stop any conflicting services.")
+                          {:node node :port http :type :http})))))))
+
 (defn- start-dockerized-cluster!
   "Start the dockerized net.async cluster."
   []
   (util/log-node-operation "Starting" "dockerized net.async cluster")
+  
+  ;; Check ports before starting containers
+  (info "Checking for port conflicts...")
+  (check-ports-available)
 
   ;; First ensure any existing containers are stopped
   (info "Cleaning up any existing containers...")
@@ -70,15 +90,16 @@
   (info "Waiting for all containers to be healthy...")
   (Thread/sleep 5000) ; Give containers initial time to start
 
-  ;; Check all nodes for health status
-  (doseq [node (sort (keys config/tcp-ports))]
-    (info "Checking health status for node" node)
-    (if (wait-for-node-ready node config/node-ready-timeout-ms)
-      (info "Node" node "is ready")
-      (do
-        (warn "Node" node "failed health check, checking container logs...")
-        (docker-exec "logs" "--tail" "50" (str "raft-" node))
-        (throw (ex-info (str "Node " node " failed to become healthy") {:node node}))))))
+  ;; Check all nodes for health status - only check nodes that Docker knows about
+  (let [docker-nodes (nodes/get-nodes :docker)] ; Get nodes from centralized config
+    (doseq [node docker-nodes]
+      (info "Checking health status for node" node)
+      (if (wait-for-node-ready node (:node-ready-timeout-ms nodes/docker-config))
+        (info "Node" node "is ready")
+        (do
+          (warn "Node" node "failed health check, checking container logs...")
+          (docker-exec "logs" "--tail" "50" (str "raft-" node))
+          (throw (ex-info (str "Node " node " failed to become healthy") {:node node})))))))
 
 (defn- stop-dockerized-cluster!
   "Stop the dockerized net.async cluster."
@@ -89,20 +110,21 @@
 (defn- check-cluster-health
   "Check if the dockerized cluster is healthy."
   []
-  (try
-    (every? #(let [{:keys [http]} (util/node->ports %)]
-               (try
-                 (slurp (str "http://localhost:" http "/debug"))
-                 true
-                 (catch Exception _ false)))
-            (keys config/tcp-ports))
-    (catch Exception e
-      (warn "Health check failed:" (.getMessage e))
-      false)))
+  (let [docker-nodes (nodes/get-nodes :docker)] ; Get nodes from centralized config
+    (try
+      (every? #(let [{:keys [http]} (nodes/node->ports %)]
+                 (try
+                   (slurp (str "http://localhost:" http "/debug"))
+                   true
+                   (catch Exception _ false)))
+              docker-nodes)
+      (catch Exception e
+        (warn "Health check failed:" (.getMessage e))
+        false))))
 
 (defrecord DockerizedNetAsyncDB []
   db/DB
-  (setup! [_ test node]
+  (setup! [_ _test node]
     (info "DockerizedNetAsyncDB setup! called for node:" node)
 
     ;; Use locking to ensure only one thread starts Docker containers

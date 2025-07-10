@@ -71,8 +71,7 @@
 (defn wait-for-node-ready
   "Wait for a node to be ready"
   [node port timeout-ms]
-  (let [start-time (System/currentTimeMillis)
-        logged-waiting? (atom false)]
+  (let [logged-waiting? (atom false)]
     (wait-for-ready
      #(let [health-result (check-health node port)]
         (when (and (nil? health-result) (not @logged-waiting?))

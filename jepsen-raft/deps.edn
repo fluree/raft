@@ -21,7 +21,7 @@
   
   ;; Performance testing
   :performance {:main-opts ["-m" "jepsen-raft.test-performance"]
-                :description "Run performance stress tests"}
+                :description "Run performance stress tests with centralized config"}
   
   ;; Development tools
   :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}

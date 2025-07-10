@@ -12,7 +12,6 @@
             [jepsen-raft.client :as netasync-client]
             [jepsen-raft.operations :as ops]
             [jepsen-raft.config :as config]
-            [jepsen-raft.model :as raft-model]
             [knossos.model :as model]))
 
 ;; Use operations from shared namespace

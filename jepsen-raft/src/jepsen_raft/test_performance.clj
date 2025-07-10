@@ -21,34 +21,32 @@
    - Response time statistics (avg, min, max, p95)
    - Success/failure rates
    - Breaking point identification"
-  (:require [clojure.tools.logging :as log]
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :as log]
             [clojure.core.async :as async :refer [go >! <!! chan close!]]
             [clojure.java.io :as io]
             [jepsen-raft.config :as config]
             [jepsen-raft.http-client :as http-client]
-            [jepsen-raft.util :as util])
+            [jepsen-raft.util :as util]
+            [jepsen-raft.nodeconfig :as nodes])
   (:import [java.util.concurrent CountDownLatch TimeUnit]))
 
 ;; Configuration
-(def ^:private all-node-ports
-  "Map of all possible node names to their HTTP ports"
-  {"n1" 7001
-   "n2" 7002
-   "n3" 7003
-   "n4" 7004
-   "n5" 7005})
-
 (def ^:private node-count
-  "Number of nodes to use for performance test (3 or 5)"
+  "Number of nodes to use for performance test (3, 5, or 7)"
   (Integer/parseInt (or (System/getenv "PERF_NODE_COUNT") "5")))
 
 (def ^:private nodes
   "Active nodes based on node-count"
-  (vec (take node-count ["n1" "n2" "n3" "n4" "n5"])))
+  (case node-count
+    3 (nodes/get-nodes :performance-3)
+    5 (nodes/get-nodes :performance-5)
+    7 (nodes/get-nodes :performance-7)
+    (nodes/get-nodes :default)))
 
 (def ^:private node-ports
   "Map of active node names to their HTTP ports"
-  (select-keys all-node-ports nodes))
+  (nodes/nodes->http-ports nodes))
 
 ;; Use timeout from config
 (def ^:private default-timeout-ms config/operation-timeout-ms)
@@ -69,39 +67,49 @@
 (defn- start-performance-node!
   "Start a single node for performance testing"
   [node]
-  (let [{:keys [tcp http]} (util/node->ports node)
-        log-dir     config/log-directory
-        log-file    (str log-dir "/" node "-perf.log")
-        err-file    (str log-dir "/" node "-perf.err")
+  (let [{:keys [tcp http]} (util/node->ports node)]
+    ;; Check for port conflicts before starting
+    (when-not (util/check-port-available tcp)
+      (throw (ex-info (str "TCP port " tcp " for node " node " is already in use. "
+                           "Please kill any lingering processes: pkill -f jepsen-raft.raft-node")
+                      {:node node :port tcp :type :tcp})))
+    (when-not (util/check-port-available http)
+      (throw (ex-info (str "HTTP port " http " for node " node " is already in use. "
+                           "Please kill any lingering processes: pkill -f jepsen-raft.raft-node")
+                      {:node node :port http :type :http})))
 
-        ;; Ensure log directory exists
-        _ (io/make-parents log-file)
+    (let [log-dir     config/log-directory
+          log-file    (str log-dir "/" node "-perf.log")
+          err-file    (str log-dir "/" node "-perf.err")
 
-        ;; Build command with all nodes (raft-node expects all 5)
-        all-nodes   (clojure.string/join "," ["n1" "n2" "n3" "n4" "n5"])
-        cmd         ["sh" "-c"
-                     (str "clojure -M -m jepsen-raft.raft-node "
-                          node " " tcp " " http " " all-nodes)]
+          ;; Ensure log directory exists
+          _ (io/make-parents log-file)
 
-        ;; Start the process
-        _ (log/info "Starting node" node "with command:" cmd)
-        process-builder (ProcessBuilder. cmd)
-        _ (.directory process-builder (java.io.File. "."))
-        _ (.redirectOutput process-builder (java.io.File. log-file))
-        _ (.redirectError process-builder (java.io.File. err-file))
-        process (.start process-builder)]
+          ;; Build command with only active nodes for proper Raft quorum calculation
+          all-nodes   (clojure.string/join "," nodes)
+          cmd         ["sh" "-c"
+                       (str "clojure -M -m jepsen-raft.raft-node "
+                            node " " tcp " " http " " all-nodes)]
 
-    (swap! node-processes assoc node process)
+          ;; Start the process
+          _ (log/info "Starting node" node "with command:" cmd)
+          process-builder (ProcessBuilder. cmd)
+          _ (.directory process-builder (java.io.File. "."))
+          _ (.redirectOutput process-builder (java.io.File. log-file))
+          _ (.redirectError process-builder (java.io.File. err-file))
+          process (.start process-builder)]
 
-    ;; Wait a moment and check if process is still alive
-    (Thread/sleep 1000)
-    (when-not (.isAlive process)
-      (let [exit-code (.exitValue process)]
-        (throw (ex-info (str "Node " node " died immediately with exit code " exit-code)
-                        {:node node :err-file err-file :exit-code exit-code}))))
+      (swap! node-processes assoc node process)
 
-    ;; Process is running
-    (log/info "Started node" node "process - JVM startup in progress")))
+      ;; Wait a moment and check if process is still alive
+      (Thread/sleep 1000)
+      (when-not (.isAlive process)
+        (let [exit-code (.exitValue process)]
+          (throw (ex-info (str "Node " node " died immediately with exit code " exit-code)
+                          {:node node :err-file err-file :exit-code exit-code}))))
+
+      ;; Process is running
+      (log/info "Started node" node "process - JVM startup in progress"))))
 
 (defn- stop-performance-node!
   "Stop a single node"
@@ -137,7 +145,7 @@
 
   ;; Wait for all nodes to be reachable via HTTP
   (log/info "Waiting for all nodes to be reachable (JVM startup can take 15-30 seconds)...")
-  (Thread/sleep 10000) ; Give JVMs time to start
+  (Thread/sleep config/perf-jvm-startup-delay-ms) ; Give JVMs time to start
   (doseq [node nodes]
     (let [port (node-ports node)]
       (loop [attempts 0]
@@ -485,7 +493,7 @@
         (println "  clojure -M:performance escalating")
         (println "  clojure -M:performance single 20 50")
         (println "Environment variables:")
-        (println "  PERF_NODE_COUNT=3            # Use 3 nodes (default: 5)")
+        (println "  PERF_NODE_COUNT=3            # Use 3, 5, or 7 nodes (default: 5)")
         (println "  PERF_USE_EXISTING_NODES=true # Use already running nodes")
         (println "  PERF_MAX_CLIENTS=500         # Test up to 500 concurrent clients (default: 100)")
         (System/exit 1)))))

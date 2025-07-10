@@ -1,73 +1,161 @@
-# Net.async Performance Test Results
-
-## Latest Test Results (2025-01-09)
-
-The net.async implementation shows excellent performance and stability:
-
-- **Peak Throughput**: 465.8 ops/sec (with 75 concurrent clients)
-- **Success Rate**: 100% at all tested concurrency levels (1-100 clients)
-- **Latency**: Low and consistent across all load levels
-- **No Breaking Point**: Cluster maintained perfect reliability throughout escalating load test
-
-## Detailed Results
-
-| Concurrent Clients | Commands/Client | Total Commands | Throughput (ops/sec) | Success Rate |
-|-------------------|-----------------|----------------|---------------------|--------------|
-| 1                 | 10              | 10             | 37.6                | 100%         |
-| 2                 | 10              | 20             | 29.6                | 100%         |
-| 5                 | 10              | 50             | 58.8                | 100%         |
-| 10                | 10              | 100            | 103.1               | 100%         |
-| 15                | 10              | 150            | 148.7               | 100%         |
-| 20                | 10              | 200            | 144.6               | 100%         |
-| 30                | 10              | 300            | 171.9               | 100%         |
-| 40                | 10              | 400            | 263.9               | 100%         |
-| 50                | 10              | 500            | 281.4               | 100%         |
-| 75                | 10              | 750            | 465.8               | 100%         |
-| 100               | 10              | 1,000          | 440.9               | 100%         |
-
-## Key Findings
-
-1. **100% Success Rate**: All operations complete successfully across all tested concurrency levels, including timeouts and error handling.
-
-2. **Excellent Scalability**: The system shows good throughput scaling, peaking at 465.8 ops/sec with 75 concurrent clients.
-
-3. **No Breaking Point**: Unlike previous tests that found breaking points around 100+ clients, the current implementation maintains perfect reliability even at high concurrency.
-
-4. **Stable Performance**: The implementation handles high concurrent load without errors, timeouts, or degradation.
+# Raft Cluster Performance Results
 
 ## Test Configuration
-
-- **Test Type**: Escalating load test (automated)
-- **Operation Types**: Read, Write, CAS, Delete
-- **Keys**: :x, :y, :z (using independent checker pattern)
+- **Max Clients**: 200 concurrent clients
+- **Commands per Client**: 10 
 - **Timeout**: 2000ms per operation
-- **Duration**: ~60 seconds total test time
+- **Test Type**: Escalating load (automatic stopping at performance degradation)
 
-## Performance Characteristics
+## Results Summary
 
-- **Light load (1-10 clients)**: 30-103 ops/sec
-- **Medium load (15-50 clients)**: 145-281 ops/sec  
-- **Heavy load (75-100 clients)**: 441-466 ops/sec
-- **Throughput pattern**: Generally increases with concurrency, peaking at 75 clients
+### 3-Node Cluster Performance
+- **Peak Throughput**: 565.2 ops/sec at 150 clients
+- **Cluster maintained 100% success rate** throughout all load levels
+- **Maximum tested**: 200 clients with 474.1 ops/sec
 
-## Comparison with Previous Results
+| Clients | Throughput (ops/sec) | Success Rate |
+|---------|---------------------|--------------|
+| 1       | 83.3                | 100.0%       |
+| 2       | 160.0               | 100.0%       |
+| 5       | 312.5               | 100.0%       |
+| 10      | 330.0               | 100.0%       |
+| 15      | 390.3               | 100.0%       |
+| 20      | 449.4               | 100.0%       |
+| 30      | 454.5               | 100.0%       |
+| 40      | 444.4               | 100.0%       |
+| 50      | 540.5               | 100.0%       |
+| 75      | 543.5               | 100.0%       |
+| 100     | 500.0               | 100.0%       |
+| 150     | **565.2**           | 100.0%       |
+| 200     | 474.1               | 100.0%       |
 
-The current results show improved stability compared to earlier tests. The implementation now maintains 100% success rate across all load levels, indicating that previous issues with linearizability violations and operation parsing have been resolved.
+### 5-Node Cluster Performance  
+- **Peak Throughput**: 638.0 ops/sec at 150 clients
+- **Cluster maintained 100% success rate** throughout all load levels
+- **Maximum tested**: 200 clients with 531.9 ops/sec
 
-## Latest Jepsen Linearizability Tests (2025-01-09)
+| Clients | Throughput (ops/sec) | Success Rate |
+|---------|---------------------|--------------|
+| 1       | 83.3                | 100.0%       |
+| 2       | 160.0               | 100.0%       |
+| 5       | 312.5               | 100.0%       |
+| 10      | 330.0               | 100.0%       |
+| 15      | 365.9               | 100.0%       |
+| 20      | 392.2               | 100.0%       |
+| 30      | 454.5               | 100.0%       |
+| 40      | 533.3               | 100.0%       |
+| 50      | 510.2               | 100.0%       |
+| 75      | 596.0               | 100.0%       |
+| 100     | 625.0               | 100.0%       |
+| 150     | **638.0**           | 100.0%       |
+| 200     | 531.9               | 100.0%       |
 
-**60-Second Extended Test Results:**
-- **Test Status**: ✅ **100% VALID** - All consistency checks passed
-- **Cluster Configuration**: 5 nodes (n1-n5) with staggered startup
-- **Final State**: Key `:x` = 59, Key `:y` = 87
-- **Linearizability**: No violations detected
-- **Performance**: All latency, rate, and timeline metrics valid
+### 7-Node Cluster Performance
+- **Peak Throughput**: 846.0 ops/sec at 150 clients  
+- **Cluster maintained 100% success rate** throughout all load levels
+- **Maximum tested**: 200 clients with 791.8 ops/sec
 
-**Node Startup Performance:**
-- **Staggered delays**: 0ms, 2s, 4s, 6s, 8s for n1-n5 respectively
-- **Startup timeout**: 60 seconds (increased from 30s)
-- **Success rate**: 100% - all nodes started reliably
-- **No port conflicts**: Dynamic port allocation working correctly
+| Clients | Throughput (ops/sec) | Success Rate |
+|---------|---------------------|--------------|
+| 1       | 82.0                | 100.0%       |
+| 2       | 160.0               | 100.0%       |
+| 5       | 312.5               | 100.0%       |
+| 10      | 330.0               | 100.0%       |
+| 15      | 342.5               | 100.0%       |
+| 20      | 284.5               | 100.0%       |
+| 30      | 454.5               | 100.0%       |
+| 40      | 596.1               | 100.0%       |
+| 50      | 590.3               | 100.0%       |
+| 75      | 610.3               | 100.0%       |
+| 100     | 699.8               | 100.0%       |
+| 150     | **846.0**           | 100.0%       |
+| 200     | 791.8               | 100.0%       |
+
+## Performance Analysis
+
+### Key Findings
+
+1. **Cluster Size Impact**: 
+   - 7-node cluster shows **33% higher peak throughput** (846.0 ops/sec) compared to 5-node (638.0 ops/sec)
+   - 5-node cluster shows **13% higher peak throughput** compared to 3-node (565.2 ops/sec)
+
+2. **Reliability**: 
+   - All cluster configurations maintained **100% success rate** under all tested load levels
+   - No breaking point detected within 200 concurrent clients
+
+3. **Optimal Load Points**:
+   - **3-node**: 150 clients for peak performance
+   - **5-node**: 150 clients for peak performance  
+   - **7-node**: 150 clients for peak performance
+
+4. **Scalability**: 
+   - Adding nodes provides significant throughput improvements
+   - Linear improvement not observed (diminishing returns pattern)
+   - 7-node cluster handles 200 clients with excellent performance (791.8 ops/sec)
+
+### Performance Characteristics
+
+- **Low Load (1-10 clients)**: All configurations perform similarly
+- **Medium Load (15-50 clients)**: 5 and 7-node clusters begin to show advantages
+- **High Load (75-200 clients)**: 7-node cluster demonstrates clear superiority
+
+### Cluster Stability
+
+All tests completed without:
+- Connection timeouts
+- Command failures  
+- Network partition issues
+- Leader election problems
+
+The Raft implementation demonstrates excellent stability and consistent performance across different cluster sizes.
+
+## Latest Jepsen Linearizability Tests (2025-01-10)
+
+### 3-Minute Test Results
+
+**Test Status**: ✅ **PASSED** - All consistency checks valid
+
+**Test Configuration:**
+- **Duration**: 180 seconds (3 minutes)
+- **Cluster**: 5 nodes (n1-n5)
+- **Concurrency**: 5 client threads
+- **Operations**: Read, Write, CAS on 3 independent keys (x, y, z)
+
+**Results Summary:**
+- **Linearizability**: Valid
+- **Timeline**: Valid
+- **Performance Metrics**: Valid
+- **Final State**: Key :x = 30, Key :y = 69
+- **Test Artifacts**: `store/raft-netasync/20250710T064403.204-0400/`
+
+### 5-Minute Test Results
+
+**Test Status**: ✅ **PASSED** - All consistency checks valid
+
+**Test Configuration:**
+- **Duration**: 300 seconds (5 minutes)
+- **Cluster**: 5 nodes (n1-n5)
+- **Concurrency**: 5 client threads
+- **Operations**: Read, Write, CAS on 3 independent keys (x, y, z)
+
+**Results Summary:**
+- **Linearizability**: Valid
+- **Timeline**: Valid
+- **Performance Metrics**: Valid
+- **Final State**: Key :x = 35, Key :y = 89
+- **Test Artifacts**: `store/raft-netasync/20250710T070046.998-0400/`
+
+### Historical Issues (Resolved)
+
+#### Previous Linearizability Violation
+**Test Status**: ❌ **FAILED** - Linearizability violation detected
+
+**Failure Summary:**
+- **Issue**: Read operation returned value `91` when register should have contained `87`
+- **Root Cause**: Write operation with value `91` timed out but appears to have partially succeeded
+- **Resolution**: Fixed Raft implementation to properly handle leader changes and state synchronization
+
+**Critical Finding**: The Raft implementation had a consistency bug where write operations could partially succeed during network timeouts, leading to split-brain scenarios and phantom reads. This issue has been resolved.
 
 ## Test Environment
 

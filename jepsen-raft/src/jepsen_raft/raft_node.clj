@@ -847,13 +847,64 @@
           parsed (for [entry entries
                        :let [[node-id host port-str] (str/split entry #":")]
                        :when (and node-id host port-str)]
-                   [node-id {:host host :port (Integer/parseInt port-str)}])]
+                   (try
+                     [node-id {:host host :port (Integer/parseInt port-str)}]
+                     (catch NumberFormatException _
+                       (throw (ex-info (str "Invalid port number in NODE_IPS: " port-str)
+                                       {:node-id node-id :host host :port-str port-str})))))]
       (into {} parsed))))
+
+(defn- build-tcp-port-map
+  "Build TCP port map from node IP mapping or fallback to sequential pattern."
+  [node-ip-map tcp-port node-id nodes]
+  (if node-ip-map
+    (into {} (for [[nid info] node-ip-map]
+               [nid (:port info)]))
+    (let [base-tcp-port (- tcp-port (Integer/parseInt (subs node-id 1)) -1)]
+      (into {} (map-indexed (fn [idx id]
+                              [id (+ base-tcp-port idx)])
+                            nodes)))))
+
+(defn- build-http-port-map
+  "Build HTTP port map from node IP mapping or fallback to sequential pattern."
+  [node-ip-map http-port node-id nodes]
+  (if node-ip-map
+    (let [sorted-nodes (sort nodes)
+          base-port 7001]
+      (into {} (map-indexed (fn [idx id]
+                              [id (+ base-port idx)])
+                            sorted-nodes)))
+    (let [base-http-port (- http-port (Integer/parseInt (subs node-id 1)) -1)]
+      (into {} (map-indexed (fn [idx id]
+                              [id (+ base-http-port idx)])
+                            nodes)))))
+
+(defn- build-tcp-host-map
+  "Build TCP host map from node IP mapping or fallback to localhost."
+  [node-ip-map nodes]
+  (if node-ip-map
+    (into {} (for [[nid info] node-ip-map]
+               [nid (:host info)]))
+    (into {} (for [id nodes] [id "localhost"]))))
+
+(defn- validate-required-args
+  "Validate that required arguments are present."
+  [node-id tcp-port-str http-port-str nodes-str]
+  (when (or (not node-id) (not tcp-port-str) (not http-port-str) (not nodes-str))
+    (println "Usage: node-id tcp-port http-port nodes")
+    (println "Example: n1 9001 7001 n1,n2,n3")
+    (println "")
+    (println "Or set environment variables:")
+    (println "  NODE_ID=n1")
+    (println "  TCP_PORT=9001")
+    (println "  HTTP_PORT=7001")
+    (println "  NODES=n1,n2,n3")
+    (println "  NODE_IPS=n1:host1:port1,n2:host2:port2,n3:host3:port3 (optional)")
+    (System/exit 1)))
 
 (defn- parse-command-line-args
   "Parse and validate command line arguments or environment variables."
   [args]
-  ;; Try CLI args first, then environment variables
   (let [node-id (or (first args) (System/getenv "NODE_ID"))
         tcp-port-str (or (second args) (System/getenv "TCP_PORT"))
         http-port-str (or (nth args 2 nil) (System/getenv "HTTP_PORT"))
@@ -862,59 +913,31 @@
         tcp-host (or (System/getenv "TCP_HOST") "0.0.0.0")
         http-host (or (System/getenv "HTTP_HOST") "0.0.0.0")]
 
-    (when (or (not node-id) (not tcp-port-str) (not http-port-str) (not nodes-str))
-      (println "Usage: node-id tcp-port http-port nodes")
-      (println "Example: n1 9001 7001 n1,n2,n3")
-      (println "")
-      (println "Or set environment variables:")
-      (println "  NODE_ID=n1")
-      (println "  TCP_PORT=9001")
-      (println "  HTTP_PORT=7001")
-      (println "  NODES=n1,n2,n3")
-      (println "  NODE_IPS=n1:host1:port1,n2:host2:port2,n3:host3:port3 (optional)")
-      (System/exit 1))
+    (validate-required-args node-id tcp-port-str http-port-str nodes-str)
 
-    (let [tcp-port (Integer/parseInt tcp-port-str)
-          http-port (Integer/parseInt http-port-str)
+    (let [tcp-port (try
+                     (Integer/parseInt tcp-port-str)
+                     (catch NumberFormatException _
+                       (throw (ex-info (str "Invalid TCP port: " tcp-port-str)
+                                       {:port tcp-port-str}))))
+          http-port (try
+                      (Integer/parseInt http-port-str)
+                      (catch NumberFormatException _
+                        (throw (ex-info (str "Invalid HTTP port: " http-port-str)
+                                        {:port http-port-str}))))
           nodes (str/split nodes-str #",")
-          node-ip-map (parse-node-ips node-ips-str)
-          ;; Build port maps
-          tcp-port-map (if node-ip-map
-                         ;; Use explicit node IP mapping for TCP ports
-                         (into {} (for [[nid info] node-ip-map]
-                                    [nid (:port info)]))
-                         ;; Fall back to sequential port pattern
-                         (let [base-tcp-port (- tcp-port (Integer/parseInt (subs node-id 1)) -1)]
-                           (into {} (map-indexed (fn [idx id]
-                                                   [id (+ base-tcp-port idx)])
-                                                 nodes))))
-          http-port-map (if node-ip-map
-                          ;; For HTTP, use the same pattern but with base ports 7001, 7002, 7003
-                          (let [sorted-nodes (sort nodes)
-                                base-port 7001]
-                            (into {} (map-indexed (fn [idx id]
-                                                    [id (+ base-port idx)])
-                                                  sorted-nodes)))
-                          ;; Fall back to sequential port pattern
-                          (let [base-http-port (- http-port (Integer/parseInt (subs node-id 1)) -1)]
-                            (into {} (map-indexed (fn [idx id]
-                                                    [id (+ base-http-port idx)])
-                                                  nodes))))
-          tcp-host-map (if node-ip-map
-                         ;; Use explicit node IP mapping for TCP hosts
-                         (into {} (for [[nid info] node-ip-map]
-                                    [nid (:host info)]))
-                         ;; Fall back to localhost
-                         (into {} (for [id nodes] [id "localhost"])))]
+          _ (when (empty? nodes)
+              (throw (ex-info "No nodes specified" {:nodes-str nodes-str})))
+          node-ip-map (parse-node-ips node-ips-str)]
       {:node-id node-id
        :tcp-port tcp-port
        :http-port http-port
        :tcp-host tcp-host
        :http-host http-host
        :nodes nodes
-       :tcp-port-map tcp-port-map
-       :http-port-map http-port-map
-       :tcp-host-map tcp-host-map})))
+       :tcp-port-map (build-tcp-port-map node-ip-map tcp-port node-id nodes)
+       :http-port-map (build-http-port-map node-ip-map http-port node-id nodes)
+       :tcp-host-map (build-tcp-host-map node-ip-map nodes)})))
 
 (defn- register-shutdown-hook
   "Register JVM shutdown hook."

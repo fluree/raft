@@ -12,7 +12,6 @@
             [jepsen-raft.client :as netasync-client]
             [jepsen-raft.nemesis-docker :as docker-nemesis]
             [jepsen-raft.operations :as ops]
-            [jepsen-raft.model :as raft-model]
             [jepsen-raft.config :as config]
             [knossos.model :as model]))
 

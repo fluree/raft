@@ -52,6 +52,14 @@
               (recur new-node new-port (inc redirects)))
             (:result result)))))))
 
+(defn- handle-command-result
+  "Handle command result with consistent error handling."
+  [cmd-result & [success-value]]
+  (cond
+    (nil? cmd-result) {:error :no-response}
+    (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
+    :else (or success-value {})))
+
 (defrecord NetAsyncClient [node]
   client/Client
   (open! [this _test node]
@@ -66,19 +74,13 @@
             result (case (:f op)
                      :read
                      (let [cmd-result (send-command! node {:op :read :key k})]
-                       (cond
-                         (nil? cmd-result) {:error :no-response}
-                         (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
-                         :else {:value (:value cmd-result)}))
+                       (handle-command-result cmd-result {:value (:value cmd-result)}))
 
                      :write
                      (let [cmd-result (send-command! node {:op :write
                                                            :key k
                                                            :value operation-value})]
-                       (cond
-                         (nil? cmd-result) {:error :no-response}
-                         (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
-                         :else {}))
+                       (handle-command-result cmd-result))
 
                      :cas
                      (let [[old new] operation-value
@@ -86,17 +88,11 @@
                                                            :key k
                                                            :old old
                                                            :new new})]
-                       (cond
-                         (nil? cmd-result) {:error :no-response}
-                         (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
-                         :else {}))
+                       (handle-command-result cmd-result))
 
                      :delete
                      (let [cmd-result (send-command! node {:op :delete :key k})]
-                       (cond
-                         (nil? cmd-result) {:error :no-response}
-                         (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
-                         :else {}))
+                       (handle-command-result cmd-result))
 
                      ;; Unknown operation
                      {:error :unknown-operation})]

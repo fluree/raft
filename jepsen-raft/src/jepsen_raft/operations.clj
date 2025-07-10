@@ -4,22 +4,22 @@
 
 (defn read-op
   "Generate a read operation."
-  [test ctx]
+  [_test _ctx]
   {:f :read})
 
 (defn write-op
   "Generate a write operation with a random value."
-  [test ctx]
+  [_test _ctx]
   {:f :write, :value (util/random-value)})
 
 (defn cas-op
   "Generate a compare-and-swap operation with random values."
-  [test ctx]
+  [_test _ctx]
   {:f :cas, :value [(util/random-value) (util/random-value)]})
 
 (defn delete-op
   "Generate a delete operation."
-  [test ctx]
+  [_test _ctx]
   {:f :delete})
 
 (def operation-generators

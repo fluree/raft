@@ -1,5 +1,6 @@
 (ns jepsen-raft.config
-  "Configuration constants and parameters for Jepsen Raft tests.")
+  "Configuration constants and parameters for Jepsen Raft tests."
+  (:require [jepsen-raft.nodeconfig :as nodes]))
 
 ;; Timeouts (in milliseconds)
 (def operation-timeout-ms
@@ -52,41 +53,45 @@
   "Default test duration in seconds."
   60)
 
-;; Network configuration
+;; Network configuration - now delegated to nodes.clj
 (def tcp-ports
-  "TCP port mapping for Raft nodes."
-  {"n1" 9001
-   "n2" 9002
-   "n3" 9003
-   "n4" 9004
-   "n5" 9005})
+  "TCP port mapping for Raft nodes.
+   DEPRECATED: Use jepsen-raft.nodes/tcp-ports instead."
+  (nodes/tcp-ports))
 
 (def http-ports
-  "HTTP port mapping for client commands."
-  {"n1" 7001
-   "n2" 7002
-   "n3" 7003
-   "n4" 7004
-   "n5" 7005})
+  "HTTP port mapping for client commands.
+   DEPRECATED: Use jepsen-raft.nodes/http-ports instead."
+  (nodes/http-ports))
 
 ;; File paths
 (def log-directory
   "Base directory for Raft logs."
   "/tmp/jepsen-raft-network/")
 
-;; Docker configuration
+;; Docker configuration - now delegated to nodes.clj
 (def docker-compose-file
   "Path to Docker Compose configuration."
-  "docker/docker-compose.yml")
+  (:compose-file nodes/docker-config))
 
 (def network-script-path
   "Path to network partition testing script."
-  "/Users/bplatz/fluree/raft/jepsen-raft/docker/test-network-partition.sh")
+  (or (System/getenv "NETWORK_SCRIPT_PATH")
+      "docker/test-network-partition.sh"))
+
+(def node-ready-timeout-ms
+  "Maximum time to wait for a node to become ready.
+   Re-exported from nodes.clj for backward compatibility."
+  (:node-ready-timeout-ms nodes/docker-config))
 
 ;; Performance test configuration
 (def perf-default-timeout-ms
   "Default timeout for performance test operations."
   2000)
+
+(def perf-jvm-startup-delay-ms
+  "Time to wait for JVM startup during performance tests."
+  10000)
 
 (def perf-breaking-point-threshold
   "Success rate threshold (%) below which the cluster is considered broken."

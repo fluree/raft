@@ -1,0 +1,182 @@
+version: '3.8'
+
+networks:
+  raft-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.101.0.0/24
+
+services:
+  n1:
+    container_name: raft-n1
+    hostname: n1
+    build:
+      context: ../..
+      dockerfile: jepsen-raft/docker/Dockerfile.node
+    environment:
+      - NODE_ID=n1
+      - TCP_PORT=9001
+      - HTTP_PORT=7001
+      - TCP_HOST=0.0.0.0
+      - HTTP_HOST=0.0.0.0
+      - NODES=n1,n2,n3,n4,n5
+      - NODE_IPS=n1:10.101.0.11:9001,n2:10.101.0.12:9002,n3:10.101.0.13:9003,n4:10.101.0.14:9004,n5:10.101.0.15:9005
+    ports:
+      - "7001:7001"  # HTTP client port
+      - "9001:9001"  # TCP Raft port
+    networks:
+      raft-network:
+        ipv4_address: 10.101.0.11
+    volumes:
+      - n1-data:/tmp/jepsen-raft-network/n1
+      - n1-logs:/var/log/raft
+    cap_add:
+      - NET_ADMIN  # Allow network manipulation for testing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7001/debug"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  n2:
+    container_name: raft-n2
+    hostname: n2
+    build:
+      context: ../..
+      dockerfile: jepsen-raft/docker/Dockerfile.node
+    environment:
+      - NODE_ID=n2
+      - TCP_PORT=9002
+      - HTTP_PORT=7002
+      - TCP_HOST=0.0.0.0
+      - HTTP_HOST=0.0.0.0
+      - NODES=n1,n2,n3,n4,n5
+      - NODE_IPS=n1:10.101.0.11:9001,n2:10.101.0.12:9002,n3:10.101.0.13:9003,n4:10.101.0.14:9004,n5:10.101.0.15:9005
+    ports:
+      - "7002:7002"  # HTTP client port
+      - "9002:9002"  # TCP Raft port
+    networks:
+      raft-network:
+        ipv4_address: 10.101.0.12
+    volumes:
+      - n2-data:/tmp/jepsen-raft-network/n2
+      - n2-logs:/var/log/raft
+    cap_add:
+      - NET_ADMIN  # Allow network manipulation for testing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7002/debug"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  n3:
+    container_name: raft-n3
+    hostname: n3
+    build:
+      context: ../..
+      dockerfile: jepsen-raft/docker/Dockerfile.node
+    environment:
+      - NODE_ID=n3
+      - TCP_PORT=9003
+      - HTTP_PORT=7003
+      - TCP_HOST=0.0.0.0
+      - HTTP_HOST=0.0.0.0
+      - NODES=n1,n2,n3,n4,n5
+      - NODE_IPS=n1:10.101.0.11:9001,n2:10.101.0.12:9002,n3:10.101.0.13:9003,n4:10.101.0.14:9004,n5:10.101.0.15:9005
+    ports:
+      - "7003:7003"  # HTTP client port
+      - "9003:9003"  # TCP Raft port
+    networks:
+      raft-network:
+        ipv4_address: 10.101.0.13
+    volumes:
+      - n3-data:/tmp/jepsen-raft-network/n3
+      - n3-logs:/var/log/raft
+    cap_add:
+      - NET_ADMIN  # Allow network manipulation for testing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7003/debug"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  n4:
+    container_name: raft-n4
+    hostname: n4
+    build:
+      context: ../..
+      dockerfile: jepsen-raft/docker/Dockerfile.node
+    environment:
+      - NODE_ID=n4
+      - TCP_PORT=9004
+      - HTTP_PORT=7004
+      - TCP_HOST=0.0.0.0
+      - HTTP_HOST=0.0.0.0
+      - NODES=n1,n2,n3,n4,n5
+      - NODE_IPS=n1:10.101.0.11:9001,n2:10.101.0.12:9002,n3:10.101.0.13:9003,n4:10.101.0.14:9004,n5:10.101.0.15:9005
+    ports:
+      - "7004:7004"  # HTTP client port
+      - "9004:9004"  # TCP Raft port
+    networks:
+      raft-network:
+        ipv4_address: 10.101.0.14
+    volumes:
+      - n4-data:/tmp/jepsen-raft-network/n4
+      - n4-logs:/var/log/raft
+    cap_add:
+      - NET_ADMIN  # Allow network manipulation for testing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7004/debug"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  n5:
+    container_name: raft-n5
+    hostname: n5
+    build:
+      context: ../..
+      dockerfile: jepsen-raft/docker/Dockerfile.node
+    environment:
+      - NODE_ID=n5
+      - TCP_PORT=9005
+      - HTTP_PORT=7005
+      - TCP_HOST=0.0.0.0
+      - HTTP_HOST=0.0.0.0
+      - NODES=n1,n2,n3,n4,n5
+      - NODE_IPS=n1:10.101.0.11:9001,n2:10.101.0.12:9002,n3:10.101.0.13:9003,n4:10.101.0.14:9004,n5:10.101.0.15:9005
+    ports:
+      - "7005:7005"  # HTTP client port
+      - "9005:9005"  # TCP Raft port
+    networks:
+      raft-network:
+        ipv4_address: 10.101.0.15
+    volumes:
+      - n5-data:/tmp/jepsen-raft-network/n5
+      - n5-logs:/var/log/raft
+    cap_add:
+      - NET_ADMIN  # Allow network manipulation for testing
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7005/debug"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  n1-data:
+  n1-logs:
+  n2-data:
+  n2-logs:
+  n3-data:
+  n3-logs:
+  n4-data:
+  n4-logs:
+  n5-data:
+  n5-logs:
+

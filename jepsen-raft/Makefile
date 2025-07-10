@@ -7,21 +7,39 @@ help: ## Show this help message
 # Testing Targets
 # ==============
 
-.PHONY: test
-test: ## Run net.async test (requires manual node startup)
-	clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5
+.PHONY: jepsen-test
+jepsen-test: ## Run net.async test (requires manual node startup)
+	@if [ "$${NODES}" = "3" ]; then \
+		echo "Running 3-node test..."; \
+		clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3; \
+	elif [ "$${NODES}" = "7" ]; then \
+		echo "Running 7-node test..."; \
+		clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5,n6,n7; \
+	else \
+		echo "Running 5-node test (default)..."; \
+		clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5; \
+	fi
 
-.PHONY: test-docker
-test-docker: ## Run dockerized net.async test with network partition nemesis
+.PHONY: jepsen-docker-test
+jepsen-docker-test: ## Run dockerized net.async test with network partition nemesis
 	clojure -M:netasync-docker test --time-limit $${TIME:-60} --nodes n1,n2,n3,n4,n5
 
-.PHONY: test-docker-minimal
-test-docker-minimal: ## Run minimal dockerized test without nemesis
+.PHONY: jepsen-docker-test-minimal
+jepsen-docker-test-minimal: ## Run minimal dockerized test without nemesis
 	clojure -M:netasync-docker test --minimal --time-limit $${TIME:-30} --nodes n1,n2,n3,n4,n5
 
-.PHONY: performance
-performance: ## Run performance stress test (auto-manages nodes)
-	clojure -M:performance escalating
+.PHONY: performance-test
+performance-test: ## Run performance stress test (auto-manages nodes)
+	@if [ "$${NODES}" = "3" ]; then \
+		echo "Running 3-node performance test..."; \
+		PERF_NODE_COUNT=3 clojure -M:performance; \
+	elif [ "$${NODES}" = "7" ]; then \
+		echo "Running 7-node performance test..."; \
+		PERF_NODE_COUNT=7 clojure -M:performance; \
+	else \
+		echo "Running 5-node performance test (default)..."; \
+		PERF_NODE_COUNT=5 clojure -M:performance; \
+	fi
 
 # Node Management Targets
 # ======================

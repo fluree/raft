@@ -1,11 +1,13 @@
 (ns jepsen-raft.db
   "Database setup for local Raft test."
-  (:require [clojure.tools.logging :refer [info warn error]]
+  (:require [clojure.string :as str]
+            [clojure.tools.logging :refer [info warn error]]
             [clojure.java.io :as io]
             [jepsen [db :as db]]
             [jepsen-raft.config :as config]
             [jepsen-raft.util :as util]
-            [jepsen-raft.http-client :as http-client]))
+            [jepsen-raft.http-client :as http-client]
+            [jepsen-raft.nodeconfig :as nodes]))
 
 ;; Use node->ports from util namespace
 
@@ -14,9 +16,21 @@
 
 (defn- start-local-node!
   "Start a local net.async Raft node."
-  [node]
+  [node test-nodes]
+  ;; Check for port conflicts before starting
+  (let [{:keys [tcp http]} (util/node->ports node)]
+    (when-not (util/check-port-available tcp)
+      (throw (ex-info (str "TCP port " tcp " for node " node " is already in use. "
+                           "Please kill any lingering processes: pkill -f jepsen-raft.raft-node")
+                      {:node node :port tcp :type :tcp})))
+    (when-not (util/check-port-available http)
+      (throw (ex-info (str "HTTP port " http " for node " node " is already in use. "
+                           "Please kill any lingering processes: pkill -f jepsen-raft.raft-node")
+                      {:node node :port http :type :http}))))
+  
   ;; Stagger node startup to avoid race conditions
-  (let [node-index (case node "n1" 0 "n2" 1 "n3" 2 "n4" 3 "n5" 4 0)
+  (let [node-index (.indexOf test-nodes node)
+        node-index (if (neg? node-index) 0 node-index)  ; Default to 0 if not found
         startup-delay (* node-index 2000)]
     (when (> startup-delay 0)
       (info "Delaying startup of" node "by" startup-delay "ms")
@@ -30,8 +44,8 @@
         ;; Ensure log directory exists
         _ (io/make-parents log-file)
 
-        ;; Build command with all available nodes 
-        nodes       (clojure.string/join "," (keys config/tcp-ports))
+        ;; Build command with only the actual test nodes 
+        nodes       (clojure.string/join "," test-nodes)
         ;; Use shell wrapper to ensure proper command execution
         cmd         ["sh" "-c"
                      (str "clojure -M -m jepsen-raft.raft-node "
@@ -94,7 +108,7 @@
 
 (defrecord NetAsyncDB []
   db/DB
-  (setup! [_ _test node]
+  (setup! [_ test node]
     (info "Setting up net.async Raft node" node)
     ;; Clean up any existing Raft logs before starting
     (let [log-dir (str config/log-directory node "/")]
@@ -103,7 +117,7 @@
         (doseq [file (.listFiles (io/file log-dir))
                 :when (.isFile file)]
           (.delete file))))
-    (start-local-node! node))
+    (start-local-node! node (:nodes test)))
 
   (teardown! [_ _test node]
     (info "Tearing down net.async Raft node" node)
