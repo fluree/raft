@@ -1,6 +1,7 @@
 (ns jepsen-raft.nodeconfig
   "Centralized node configuration for all Jepsen Raft tests.
-   This is the single source of truth for node definitions, ports, and Docker-specific settings.")
+   This is the single source of truth for node definitions, ports, and Docker-specific settings."
+  (:require [clojure.string :as str]))
 
 ;; Define all possible nodes with their configuration
 (def all-nodes
@@ -91,33 +92,33 @@
   "Convert a list of node IDs to a map of node->tcp-port.
    Useful for maintaining compatibility with existing code."
   [nodes]
-  (into {} (map (fn [node] [node (get-tcp-port node)]) nodes)))
+  (into {} (for [node nodes] [node (get-tcp-port node)])))
 
 (defn nodes->http-ports
   "Convert a list of node IDs to a map of node->http-port.
    Useful for maintaining compatibility with existing code."
   [nodes]
-  (into {} (map (fn [node] [node (get-http-port node)]) nodes)))
+  (into {} (for [node nodes] [node (get-http-port node)])))
 
 (defn tcp-ports
   "Get all TCP ports as a map for backward compatibility"
   []
-  (into {} (map (fn [[k v]] [k (:tcp-port v)]) all-nodes)))
+  (reduce-kv (fn [m k v] (assoc m k (:tcp-port v))) {} all-nodes))
 
 (defn http-ports
   "Get all HTTP ports as a map for backward compatibility"
   []
-  (into {} (map (fn [[k v]] [k (:http-port v)]) all-nodes)))
+  (reduce-kv (fn [m k v] (assoc m k (:http-port v))) {} all-nodes))
 
 (defn docker-node-ips
   "Get Docker IP configuration string for a list of nodes.
    Format: 'n1:10.101.0.11:9001,n2:10.101.0.12:9002,...'"
   [nodes]
-  (clojure.string/join ","
-    (map (fn [node]
-           (let [config (get-node-config node)]
-             (str node ":" (:docker-ip config) ":" (:tcp-port config))))
-         nodes)))
+  (->> nodes
+       (map (fn [node]
+              (let [{:keys [docker-ip tcp-port]} (get-node-config node)]
+                (str node ":" docker-ip ":" tcp-port))))
+       (str/join ",")))
 
 (defn get-node-count
   "Get the number of nodes in a profile"

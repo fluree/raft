@@ -6,8 +6,7 @@
             [jepsen [db :as db]]
             [jepsen-raft.config :as config]
             [jepsen-raft.util :as util]
-            [jepsen-raft.http-client :as http-client]
-            [jepsen-raft.nodeconfig :as nodes]))
+            [jepsen-raft.http-client :as http-client]))
 
 ;; Use node->ports from util namespace
 
