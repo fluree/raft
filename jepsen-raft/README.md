@@ -17,32 +17,34 @@ This directory contains Jepsen tests for the Fluree Raft implementation. These t
 
 ### Local Testing (Non-Dockerized)
 ```bash
-# Run the default test
-make test
+# Run the default 5-node test (120 seconds)
+make jepsen-test
 
-# With custom time limit
-TIME=30 make test
+# Run with different node counts and time limits
+NODES=3 TIME=60 make jepsen-test
+NODES=7 TIME=180 make jepsen-test
 ```
 
 ### Dockerized Testing (Recommended for Production Validation)
 ```bash
-# Run dockerized test with network failures
-make test-docker
+# Run dockerized test with network failures (60 seconds)
+make jepsen-docker-test
 
-# Run minimal test without network failures (faster)
-make test-docker-minimal
+# Run minimal test without network failures (30 seconds)
+make jepsen-docker-test-minimal
+
+# With custom time limit
+TIME=120 make jepsen-docker-test
 ```
 
 ### Performance Testing
 ```bash
 # Run escalating load test (auto-starts nodes)
-make performance
+make performance-test
 
-# Test with 3 nodes instead of 5
-PERF_NODE_COUNT=3 make performance
-
-# Test up to 500 concurrent clients
-PERF_MAX_CLIENTS=500 make performance
+# Test with different node counts
+NODES=3 make performance-test
+NODES=7 make performance-test
 ```
 
 ## Test Suites Overview
@@ -50,20 +52,32 @@ PERF_MAX_CLIENTS=500 make performance
 We have **3 test suites**, each designed to validate different aspects of the Raft implementation:
 
 ### 1. Local Net.Async Test (`test.clj`)
-- **Command**: `make test` or `clojure -M:netasync test netasync`
+- **Commands**: 
+  - `make jepsen-test` (default 5-node, 10s duration)
+  - Manual: `clojure -M:netasync test netasync --time-limit 60 --nodes n1,n2,n3,n4,n5`
 - **Purpose**: Basic Raft consensus validation with TCP communication
 - **Environment**: Local processes using net.async library
 - **Key Features**:
   - Quick development iteration
   - No network failures (no nemesis)
-  - Tests read, write, CAS, and delete operations
+  - Tests read, write, CAS operations
   - Verifies linearizability (strong consistency)
   - Best for development and debugging
+- **Environment Variables**:
+  - `NODES=3|5|7`: Node count (default: 5)
+  - `TIME=N`: Test duration in seconds (default: 10)
+- **Standard Jepsen CLI Options**:
+  - `--time-limit N`: Test duration in seconds
+  - `--nodes n1,n2,n3`: Comma-separated node list
+  - `--concurrency N`: Concurrent operations
+  - `--test-count N`: Number of test iterations
+  - `--rate N`: Operation rate
 
 ### 2. Dockerized Test with Network Failures (`test_docker.clj`)
 - **Commands**: 
-  - Full test: `make test-docker` (60s default)
-  - Minimal test: `make test-docker-minimal` (30s default)
+  - Full test: `make jepsen-docker-test` (60s default)
+  - Minimal test: `make jepsen-docker-test-minimal` (30s default)
+  - Manual: `clojure -M:netasync-docker test --time-limit 60 --nodes n1,n2,n3,n4,n5`
 - **Purpose**: Validate Raft behavior under realistic network failures
 - **Environment**: Docker containers with network isolation
 - **Key Features**:
@@ -75,21 +89,35 @@ We have **3 test suites**, each designed to validate different aspects of the Ra
     - Phase 2: Operations with network partitions and latency
     - Phase 3: Recovery validation
   - Most realistic production-like testing
+- **Environment Variables**:
+  - `TIME=N`: Test duration in seconds (default: 60 for full, 30 for minimal)
+- **Docker-Specific CLI Options**:
+  - `--minimal`: Run without nemesis (network failures)
+- **Standard Jepsen CLI Options**: Same as local test
 
 ### 3. Performance Stress Test (`test_performance.clj`)
-- **Command**: `make performance` or `clojure -M:performance`
+- **Commands**: 
+  - `make performance-test` (default 5-node cluster)
+  - Manual escalating: `clojure -M:performance escalating`
+  - Manual single load: `clojure -M:performance single 50 100`
 - **Purpose**: Identify cluster throughput limits and breaking points
 - **Key Features**:
   - **Automatic node management**: Starts/stops nodes automatically (default)
-  - **Configurable cluster size**: 3 or 5 nodes via `PERF_NODE_COUNT`
+  - **Configurable cluster size**: 3, 5, or 7 nodes
   - **Flexible load testing**: Up to 1000+ concurrent clients
 - **Test Modes**:
   - **Escalating**: Automatically increases load until failure (default)
   - **Single**: Fixed load test with specified clients/commands
-- **Configuration Options**:
-  - `PERF_NODE_COUNT=3|5`: Number of nodes to test (default: 5)
+- **Environment Variables**:
+  - `NODES=3|5|7`: Number of nodes to test (default: 5)
+  - `PERF_NODE_COUNT=3|5|7`: Same as NODES (for direct clojure calls)
   - `PERF_MAX_CLIENTS=N`: Maximum concurrent clients (default: 100)
   - `PERF_USE_EXISTING_NODES=true`: Use already-running nodes
+- **Command Line Arguments**:
+  - `escalating`: Run escalating load test (default)
+  - `single <clients> <commands>`: Run fixed load test
+    - `<clients>`: Number of concurrent clients
+    - `<commands>`: Commands per client
 - **Metrics Tracked**:
   - Throughput (operations per second)
   - Response times (average, min, max, 95th percentile)
@@ -99,7 +127,7 @@ We have **3 test suites**, each designed to validate different aspects of the Ra
   - Capacity planning
   - Performance regression testing
   - Hardware sizing recommendations
-  - Comparing 3-node vs 5-node performance
+  - Comparing 3-node vs 5-node vs 7-node performance
 
 ### Common Test Characteristics
 All tests share these features:
@@ -116,25 +144,47 @@ All tests share these features:
 
 ```
 jepsen-raft/
-├── Makefile                    # Convenient test commands
-├── README.md                   # This documentation
-├── deps.edn                    # Dependencies and aliases
+├── Makefile                         # Convenient test commands and automation
+├── README.md                        # This documentation
+├── deps.edn                         # Dependencies and aliases
+├── performance-results.md           # Latest performance test results
 ├── src/jepsen_raft/
-│   ├── client.clj              # Jepsen client implementation
-│   ├── db.clj                  # Database setup for local testing
-│   ├── db_docker.clj           # Docker container management
-│   ├── nemesis_docker.clj      # Network failure injection
-│   ├── raft_node.clj           # Complete Raft node implementation
-│   ├── test.clj                # Local test runner
-│   ├── test_docker.clj         # Dockerized test runner
-│   ├── test_performance.clj    # Performance stress test
-│   └── util.clj                # Shared utilities and state machines
+│   ├── client.clj                   # Jepsen client implementation for HTTP API
+│   ├── config.clj                   # Shared configuration and constants
+│   ├── db.clj                       # Database setup for local testing
+│   ├── db_docker.clj                # Docker container management
+│   ├── http_client.clj              # HTTP client utilities for node communication
+│   ├── nemesis_docker.clj           # Network failure injection for Docker tests
+│   ├── nodeconfig.clj               # Centralized node configuration management
+│   ├── operations.clj               # Shared Jepsen operation definitions
+│   ├── raft_node.clj                # Complete Raft node implementation with TCP/HTTP
+│   ├── test.clj                     # Local net.async test runner
+│   ├── test_docker.clj              # Dockerized test runner with network failures
+│   ├── test_performance.clj         # Performance stress test with auto-scaling load
+│   └── util.clj                     # Shared utilities and state machines
+├── scripts/
+│   ├── generate-docker-compose.clj  # Generate Docker Compose configurations
+│   ├── get-nodes.clj                # Node configuration helper script
+│   └── run-performance.clj          # Performance test automation script
+├── resources/
+│   └── logback.xml                  # Logging configuration
 ├── docker/
-│   ├── node/
-│   │   └── Dockerfile          # Container definition
-│   ├── docker-compose.yml      # 3-node cluster configuration
-│   └── test-network-partition.sh # Network failure testing script
-└── store/                      # Test results and artifacts
+│   ├── Dockerfile.node              # Container definition for Raft nodes
+│   ├── docker-compose.yml           # 5-node cluster configuration
+│   ├── docker-compose-generated.yml # Generated configurations for different sizes
+│   └── test-network-partition.sh    # Network failure testing and automation script
+├── logs/                            # Node logs from local testing
+│   ├── n1.log                       # Node 1 logs
+│   ├── n2.log                       # Node 2 logs
+│   ├── n3.log                       # Node 3 logs
+│   ├── n4.log                       # Node 4 logs
+│   └── n5.log                       # Node 5 logs
+└── store/                           # Test results and artifacts
+    ├── current                      # Symlink to latest test run
+    ├── latest                       # Symlink to latest test run
+    ├── raft-netasync-*/             # Local test results (timestamped)
+    ├── raft-netasync-docker-*/      # Docker test results (timestamped)
+    └── performance-*/               # Performance test results (timestamped)
 ```
 
 ## Testing Scenarios and When to Use Each
@@ -252,23 +302,52 @@ Based on our latest testing (2025-01-09):
 
 ### Available Make Targets
 ```bash
-make help                # Show all available commands
-make test                # Run non-dockerized test
-make test-docker         # Run dockerized test with nemesis
-make test-docker-minimal # Run dockerized test without nemesis
-make docker-build        # Build Docker images
-make docker-up           # Start Docker cluster
-make docker-down         # Stop Docker cluster
-make docker-logs         # View container logs
-make docker-test-network # Test network partitions
-make performance         # Run performance test (auto-manages nodes)
-make start-nodes         # Start net.async nodes manually
-make stop-nodes          # Stop all running nodes
-make restart-nodes       # Restart nodes with fresh state
-make check-nodes         # Check node health status
-make lint                # Lint source code
-make clean               # Clean all test artifacts
+make help                     # Show all available commands
+
+# Test Targets
+make jepsen-test              # Run net.async test (requires manual node startup)
+make jepsen-docker-test       # Run dockerized test with network partition nemesis
+make jepsen-docker-test-minimal # Run minimal dockerized test without nemesis
+make performance-test         # Run performance stress test (auto-manages nodes)
+
+# Node Management Targets  
+make start-nodes              # Start net.async Raft nodes manually
+make stop-nodes               # Stop all net.async Raft nodes
+make check-nodes              # Check if net.async nodes are running and healthy
+make restart-nodes            # Restart all net.async nodes with fresh state
+make logs                     # Tail logs for all running nodes
+
+# Docker Targets
+make docker-build             # Build Docker images for net.async testing
+make docker-up                # Start net.async Docker test environment
+make docker-down              # Stop and remove net.async Docker test environment
+make docker-logs              # Show logs from net.async Docker containers
+make docker-test-network      # Test network partition scenarios
+
+# Utility Targets
+make lint                     # Lint source code with clj-kondo
+make clean                    # Remove all test results and temporary files
 ```
+
+### Environment Variables Summary
+
+**Makefile Environment Variables:**
+- `NODES=3|5|7`: Node count for tests (default varies by test)
+- `TIME=N`: Test duration in seconds (default varies by test)
+
+**Raft Node Environment Variables** (for Docker containers):
+- `NODE_ID`: Node identifier (e.g., "n1", "n2", "n3")
+- `TCP_PORT`: Port for Raft TCP communication between nodes
+- `HTTP_PORT`: Port for HTTP client API
+- `NODES`: Comma-separated list of all nodes in cluster
+- `NODE_IPS`: Container IP mapping (format: n1:host1:port1,n2:host2:port2)
+- `TCP_HOST`: TCP bind host (defaults to "0.0.0.0")
+- `HTTP_HOST`: HTTP bind host (defaults to "0.0.0.0")
+
+**Performance Test Environment Variables:**
+- `PERF_NODE_COUNT=3|5|7`: Number of nodes for performance test (default: 5)
+- `PERF_USE_EXISTING_NODES=true`: Use existing running nodes
+- `PERF_MAX_CLIENTS=N`: Maximum concurrent clients for escalating test (default: 100)
 
 ### Manual Testing
 ```bash
