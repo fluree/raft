@@ -1,12 +1,12 @@
 (ns jepsen-raft.test
   "Main test runner using net.async for TCP communication."
   (:require [jepsen [checker :as checker]
-                    [cli :as cli]
-                    [generator :as gen]
-                    [nemesis :as nemesis]
-                    [tests :as tests]
-                    [os :as os]
-                    [independent :as independent]]
+             [cli :as cli]
+             [generator :as gen]
+             [nemesis :as nemesis]
+             [tests :as tests]
+             [os :as os]
+             [independent :as independent]]
             [jepsen.checker.timeline :as timeline]
             [jepsen-raft.db :as netasync-db]
             [jepsen-raft.client :as netasync-client]
@@ -36,17 +36,17 @@
             :ssh       {:dummy? true}
             :concurrency config/default-concurrency
             :checker   (checker/compose
-                         {:perf     (checker/perf)
-                          :timeline (timeline/html)
-                          :linear   (independent/checker
-                                      (checker/linearizable 
-                                        {:model (model/cas-register)}))})
+                        {:perf     (checker/perf)
+                         :timeline (timeline/html)
+                         :linear   (independent/checker
+                                    (checker/linearizable
+                                     {:model (model/cas-register)}))})
             :generator (->> (independent/concurrent-generator
-                              3
-                              config/test-keys
-                              (fn [_k]
-                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
-                                     (gen/stagger config/default-stagger-rate))))
+                             3
+                             config/test-keys
+                             (fn [_k]
+                               (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
+                                    (gen/stagger config/default-stagger-rate))))
                             (gen/nemesis nil)
                             (gen/time-limit (:time-limit opts)))})))
 

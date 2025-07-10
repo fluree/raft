@@ -134,7 +134,7 @@
     (when (> idx 0)
       (Thread/sleep 2000))  ; 2 second delay between nodes
     (start-performance-node! node))
-  
+
   ;; Wait for all nodes to be reachable via HTTP
   (log/info "Waiting for all nodes to be reachable (JVM startup can take 15-30 seconds)...")
   (Thread/sleep 10000) ; Give JVMs time to start
@@ -142,7 +142,7 @@
     (let [port (node-ports node)]
       (loop [attempts 0]
         (when (> attempts 30) ; 30 attempts = 30 seconds
-          (throw (ex-info (str "Node " node " HTTP port not responding after 30 attempts") 
+          (throw (ex-info (str "Node " node " HTTP port not responding after 30 attempts")
                           {:node node :port port})))
         (if (http-client/check-health node port)
           (log/info "Node" node "HTTP port is responding")
@@ -151,7 +151,7 @@
               (log/info "Still waiting for" node "to start... attempt" attempts))
             (Thread/sleep 1000)
             (recur (inc attempts)))))))
-  
+
   ;; Give cluster time to elect leader
   (Thread/sleep 5000)
   (log/info "Cluster started with" node-count "nodes"))

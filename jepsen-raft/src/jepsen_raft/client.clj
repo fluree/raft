@@ -2,7 +2,7 @@
   "Client for Raft test."
   (:require [clojure.tools.logging :refer [error]]
             [jepsen [client :as client]
-                    [independent :as independent]]
+             [independent :as independent]]
             [jepsen-raft.config :as config]
             [jepsen-raft.http-client :as http-client]))
 
@@ -30,9 +30,9 @@
       (if (>= redirects max-redirects)
         (throw (ex-info "Too many redirects" {:type :too-many-redirects}))
         (let [result (try
-                       (if-let [response (http-client/send-command! 
-                                          current-node 
-                                          current-port 
+                       (if-let [response (http-client/send-command!
+                                          current-node
+                                          current-port
                                           command
                                           1000)]  ; 1 second timeout for faster failures
                          (if-let [redirect (handle-redirect response)]
@@ -56,9 +56,9 @@
   client/Client
   (open! [this _test node]
     (assoc this :node node))
-  
+
   (setup! [_this _test])
-  
+
   (invoke! [_this _test op]
     (try
       ;; For independent checker, the Op record contains [:key operation-value] in its :value field
@@ -70,16 +70,16 @@
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
                          :else {:value (:value cmd-result)}))
-                     
+
                      :write
-                     (let [cmd-result (send-command! node {:op :write 
+                     (let [cmd-result (send-command! node {:op :write
                                                            :key k
                                                            :value operation-value})]
                        (cond
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
                          :else {}))
-                     
+
                      :cas
                      (let [[old new] operation-value
                            cmd-result (send-command! node {:op :cas
@@ -90,49 +90,49 @@
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
                          :else {}))
-                     
+
                      :delete
                      (let [cmd-result (send-command! node {:op :delete :key k})]
                        (cond
                          (nil? cmd-result) {:error :no-response}
                          (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
                          :else {}))
-                     
+
                      ;; Unknown operation
                      {:error :unknown-operation})]
-        
+
         (if (:error result)
           (assoc op :type :fail :error (:error result))
           (case (:f op)
             :read (assoc op :type :ok :value (independent/tuple k (:value result)))
             (assoc op :type :ok))))
-      
+
       (catch Exception ex
         (let [data (ex-data ex)
               error-type (:type data)]
           (case error-type
             :timeout
             (assoc op :type :info :error :timeout)
-            
+
             :connection-refused
             (assoc op :type :fail :error :connection-refused)
-            
+
             :no-leader
             (assoc op :type :fail :error :no-leader)
-            
+
             :too-many-redirects
             (assoc op :type :fail :error :too-many-redirects)
-            
+
             :no-response
             (assoc op :type :fail :error :no-response)
-            
+
             ;; Default case for unexpected errors
             (do
               (error ex "Unexpected error")
               (assoc op :type :fail :error (str ex))))))))
-  
+
   (teardown! [_this _test])
-  
+
   (close! [_this _test]))
 
 (defn client

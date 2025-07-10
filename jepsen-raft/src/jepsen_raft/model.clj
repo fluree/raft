@@ -11,22 +11,22 @@
           current-value (get registers k)]
       (log/debug "Model step: op=" op ", key=" k ", current-value=" current-value ", registers=" registers)
       (condp = (:f op)
-          :write
-          (MultiRegister. (assoc registers k (:value op)))
-          
-          :cas
-          (let [[expected new-value] (:value op)]
-            (if (= current-value expected)
-              (MultiRegister. (assoc registers k new-value))
-              (model/inconsistent (str "can't CAS " k " from " expected " to " new-value
-                                       " when current value is " current-value))))
-          
-          :read
-          (let [read-value (:value op)]
-            (if (or (nil? read-value) (= current-value read-value))
-              r
-              (model/inconsistent (str "can't read " read-value " from " k
-                                       " when current value is " current-value))))))))
+        :write
+        (MultiRegister. (assoc registers k (:value op)))
+
+        :cas
+        (let [[expected new-value] (:value op)]
+          (if (= current-value expected)
+            (MultiRegister. (assoc registers k new-value))
+            (model/inconsistent (str "can't CAS " k " from " expected " to " new-value
+                                     " when current value is " current-value))))
+
+        :read
+        (let [read-value (:value op)]
+          (if (or (nil? read-value) (= current-value read-value))
+            r
+            (model/inconsistent (str "can't read " read-value " from " k
+                                     " when current value is " current-value))))))))
 
 (defn multi-register
   "A register supporting read, write, and CAS operations on multiple keys.

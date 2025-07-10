@@ -1,12 +1,12 @@
 (ns jepsen-raft.test-docker
   "Dockerized Raft test with Jepsen integration and network partition nemesis."
   (:require [jepsen [checker :as checker]
-                    [cli :as cli]
-                    [generator :as gen]
-                    [nemesis :as nemesis]
-                    [tests :as tests]
-                    [os :as os]
-                    [independent :as independent]]
+             [cli :as cli]
+             [generator :as gen]
+             [nemesis :as nemesis]
+             [tests :as tests]
+             [os :as os]
+             [independent :as independent]]
             [jepsen.checker.timeline :as timeline]
             [jepsen-raft.db-docker :as docker-db]
             [jepsen-raft.client :as netasync-client]
@@ -43,27 +43,27 @@
             :ssh       {:dummy? true}
             :concurrency config/default-concurrency
             :checker   (checker/compose
-                         {:perf     (checker/perf)
-                          :timeline (timeline/html)
-                          :linear   (independent/checker
-                                      (checker/linearizable 
-                                        {:model (model/cas-register)}))})
+                        {:perf     (checker/perf)
+                         :timeline (timeline/html)
+                         :linear   (independent/checker
+                                    (checker/linearizable
+                                     {:model (model/cas-register)}))})
             :generator (->> (independent/concurrent-generator
-                              3
-                              config/test-keys
-                              (fn [_k]
-                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
-                                     (gen/stagger config/default-stagger-rate))))
+                             3
+                             config/test-keys
+                             (fn [_k]
+                               (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
+                                    (gen/stagger config/default-stagger-rate))))
                             (gen/nemesis
-                              (cycle
-                                [(gen/sleep 10)
-                                 {:type :info :f :start-partition :value :random}
-                                 (gen/sleep 15)
-                                 {:type :info :f :stop-partition}
-                                 (gen/sleep 10)
-                                 {:type :info :f :add-latency :value 200}
-                                 (gen/sleep 10)
-                                 {:type :info :f :remove-latency}]))
+                             (cycle
+                              [(gen/sleep 10)
+                               {:type :info :f :start-partition :value :random}
+                               (gen/sleep 15)
+                               {:type :info :f :stop-partition}
+                               (gen/sleep 10)
+                               {:type :info :f :add-latency :value 200}
+                               (gen/sleep 10)
+                               {:type :info :f :remove-latency}]))
                             (gen/time-limit (:time-limit opts)))})))
 
 (defn dockerized-raft-test-minimal
@@ -81,17 +81,17 @@
             :ssh       {:dummy? true}
             :concurrency config/default-concurrency
             :checker   (checker/compose
-                         {:perf     (checker/perf)
-                          :timeline (timeline/html)
-                          :linear   (independent/checker
-                                      (checker/linearizable 
-                                        {:model (model/cas-register)}))})
+                        {:perf     (checker/perf)
+                         :timeline (timeline/html)
+                         :linear   (independent/checker
+                                    (checker/linearizable
+                                     {:model (model/cas-register)}))})
             :generator (->> (independent/concurrent-generator
-                              3
-                              config/test-keys
-                              (fn [_k]
-                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
-                                     (gen/stagger config/default-stagger-rate))))
+                             3
+                             config/test-keys
+                             (fn [_k]
+                               (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
+                                    (gen/stagger config/default-stagger-rate))))
                             (gen/nemesis nil)  ; No nemesis operations
                             (gen/time-limit (:time-limit opts)))})))
 
@@ -102,7 +102,7 @@
   ;; Custom CLI parsing to handle minimal flag properly
   (let [minimal? (some #(= "--minimal" %) args)
         test-fn (if minimal? dockerized-raft-test-minimal dockerized-raft-test)]
-    (cli/run! (cli/single-test-cmd 
-                {:test-fn test-fn
-                 :opt-spec [[nil "--minimal" "Run minimal test without nemesis"]]})
+    (cli/run! (cli/single-test-cmd
+               {:test-fn test-fn
+                :opt-spec [[nil "--minimal" "Run minimal test without nemesis"]]})
               args)))

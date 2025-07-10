@@ -21,22 +21,22 @@
     (when (> startup-delay 0)
       (info "Delaying startup of" node "by" startup-delay "ms")
       (Thread/sleep startup-delay)))
-  
+
   (let [{:keys [tcp http]} (util/node->ports node)
         log-dir     config/log-directory
         log-file    (str log-dir "/" node ".log")
         err-file    (str log-dir "/" node ".err")
-        
+
         ;; Ensure log directory exists
         _ (io/make-parents log-file)
-        
+
         ;; Build command with all available nodes 
         nodes       (clojure.string/join "," (keys config/tcp-ports))
         ;; Use shell wrapper to ensure proper command execution
-        cmd         ["sh" "-c" 
-                     (str "clojure -M -m jepsen-raft.raft-node " 
+        cmd         ["sh" "-c"
+                     (str "clojure -M -m jepsen-raft.raft-node "
                           node " " tcp " " http " " nodes)]
-        
+
         ;; Start the process
         working-dir (java.io.File. ".")
         _ (info "Working directory for" node ":" (.getAbsolutePath working-dir))
@@ -49,25 +49,25 @@
         _ (.redirectError process-builder (java.io.File. err-file))
         _ (util/log-node-operation "Starting" node (str "with command: " cmd))
         process (.start process-builder)]
-    
+
     ;; Store process for later cleanup
     (swap! node-processes assoc node process)
-    
+
     ;; Check if process started successfully
     (util/log-node-operation "Process started for" node (str "isAlive: " (.isAlive process)))
-    
+
     ;; Give process time to write initial output
     (Thread/sleep 1000)
-    
+
     ;; Check if process is still alive
     (when-not (.isAlive process)
       (let [exit-code (.exitValue process)]
         (throw (ex-info (str "Process for node " node " died immediately with exit code " exit-code ". Check " err-file " for errors")
                         {:node node :err-file err-file :exit-code exit-code}))))
-    
+
     ;; Wait for node to be ready
     (Thread/sleep 2000)
-    
+
     ;; Check if node started successfully using http-client with longer timeout
     (if (http-client/wait-for-node-ready node http 60000)
       (do
@@ -104,20 +104,20 @@
                 :when (.isFile file)]
           (.delete file))))
     (start-local-node! node))
-  
+
   (teardown! [_ _test node]
     (info "Tearing down net.async Raft node" node)
     (stop-local-node! node))
-  
+
   db/Primary
   (primaries [_ test]
     ;; All nodes can potentially be primary in Raft
     (:nodes test))
-  
+
   (setup-primary! [_ _test _node]
     ;; No special primary setup needed
     )
-  
+
   db/LogFiles
   (log-files [_ _test node]
     [(str config/log-directory node ".log")

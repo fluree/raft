@@ -21,7 +21,7 @@
   (info "Partitioning node" node "from cluster")
   (case node
     "n1" (run-network-script "partition-n1")
-    "n2" (run-network-script "partition-n2")  
+    "n2" (run-network-script "partition-n2")
     "n3" (run-network-script "partition-n3")
     (warn "Unknown node for partitioning:" node)))
 
@@ -66,7 +66,7 @@
   (setup! [nemesis _test]
     (info "Setting up Docker network nemesis")
     nemesis)
-  
+
   (invoke! [_nemesis _test op]
     (let [f (:f op)]
       (case f
@@ -77,26 +77,26 @@
             :split-brain (create-split-brain)
             (partition-node (name target)))
           (assoc op :type :info :value target))
-        
+
         :stop-partition
         (do
           (heal-partitions)
           (assoc op :type :info))
-        
+
         :add-latency
         (let [latency (:value op 200)]
           (add-latency latency)
           (assoc op :type :info :value latency))
-        
+
         :remove-latency
         (do
           (remove-latency)
           (assoc op :type :info))
-        
+
         (do
           (warn "Unknown nemesis operation:" f)
           (assoc op :type :fail :error "Unknown operation")))))
-  
+
   (teardown! [_nemesis _test]
     (info "Tearing down Docker network nemesis")
     (heal-partitions)

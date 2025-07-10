@@ -68,16 +68,16 @@
         (nil? op)
         (do (debug "State machine received entry with nil op:" entry)
             (ok-result))  ; Return ok for internal Raft operations
-        
+
         ;; Standard operations
         (= op :write)
         (do
           (swap! state-atom assoc key value)
           (ok-result))
-            
+
         (= op :read)
         (ok-result (get @state-atom key))
-        
+
         (= op :cas)
         (let [current-value (get @state-atom key)]
           (debug "CAS operation: key=" key "old=" old "new=" new "current-value=" current-value "state=" @state-atom)
@@ -89,12 +89,12 @@
             (let [failure-result (fail-result :cas-failed)]
               (debug "CAS failed: key=" key "expected=" old "actual=" current-value "equal?=" (= current-value old) "returning=" failure-result)
               failure-result)))
-          
+
         (= op :delete)
         (do
           (swap! state-atom dissoc key)
           (ok-result))
-            
+
         ;; Unknown operation
         :else
         (do (debug "State machine received unknown op:" op "in entry:" entry)
@@ -129,11 +129,11 @@
     
   Returns:
     Map of Raft configuration options"
-  [node-id all-nodes & {:keys [log-dir state-machine-fn rpc-sender-fn 
-                                leader-change-fn]
-                         :or {log-dir (str (:log-directory default-paths) node-id "/")
-                              leader-change-fn (fn [event] 
-                                                 (info node-id "leader change:" event))}}]
+  [node-id all-nodes & {:keys [log-dir state-machine-fn rpc-sender-fn
+                               leader-change-fn]
+                        :or {log-dir (str (:log-directory default-paths) node-id "/")
+                             leader-change-fn (fn [event]
+                                                (info node-id "leader change:" event))}}]
   (cond-> {:servers all-nodes
            :this-server node-id
            :log-directory log-dir
