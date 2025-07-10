@@ -8,26 +8,10 @@
 ;; Configuration Constants
 ;; =============================================================================
 
-(def default-timeouts
-  "Default timeout configurations for Raft tests"
-  {:operation-timeout-ms 5000    ; Client operation timeout
-   :heartbeat-ms 100              ; Raft heartbeat interval  
-   :election-timeout-ms 300       ; Raft election timeout
-   :rpc-timeout-ms 6000          ; RPC operation timeout
-   :leader-wait-ms 2000})        ; Time to wait for leader election
-
-(def default-paths
-  "Default file system paths for Raft tests"
-  {:log-directory "/tmp/jepsen-raft/"})
-
-(def default-test-params
-  "Default parameters for test operations"
-  {:test-keys [:x :y :z]         ; Keys used in operations
-   :value-range 100              ; Range for random values
-   :rpc-delay-max-ms 5           ; Maximum simulated network delay
-   :snapshot-threshold 100       ; Entries before snapshot
-   :cluster-size 3               ; Default number of nodes
-   :port-base 7000})            ; Base port for services
+;; Default timeouts used by default-raft-config
+(def ^:private default-heartbeat-ms 100)
+(def ^:private default-election-timeout-ms 300)
+(def ^:private default-snapshot-threshold 100)
 
 ;; =============================================================================
 ;; Result Helpers
@@ -91,11 +75,6 @@
               (debug "CAS failed: key=" key "expected=" old "actual=" current-value "equal?=" (= current-value old) "returning=" failure-result)
               failure-result)))
 
-        (= op :delete)
-        (do
-          (swap! state-atom dissoc key)
-          (ok-result))
-
         ;; Unknown operation
         :else
         (do (debug "State machine received unknown op:" op "in entry:" entry)
@@ -109,8 +88,7 @@
   "Map node name to TCP and HTTP ports.
    Delegates to centralized nodes configuration."
   [node]
-  (or (nodes/node->ports node)
-      {:tcp 9000 :http 7000}))  ; Fallback for unknown nodes
+  (nodes/node->ports node))
 
 (defn check-port-available
   "Check if a port is available for binding."
@@ -143,17 +121,17 @@
     Map of Raft configuration options"
   [node-id all-nodes & {:keys [log-dir state-machine-fn rpc-sender-fn
                                leader-change-fn]
-                        :or {log-dir (str (:log-directory default-paths) node-id "/")
+                        :or {log-dir (str config/log-directory node-id "/")
                              leader-change-fn (fn [event]
                                                 (info node-id "leader change:" event))}}]
   (cond-> {:servers all-nodes
            :this-server node-id
            :log-directory log-dir
-           :heartbeat-ms (:heartbeat-ms default-timeouts)
-           :timeout-ms (:election-timeout-ms default-timeouts)
-           :snapshot-threshold (:snapshot-threshold default-test-params)
+           :heartbeat-ms default-heartbeat-ms
+           :timeout-ms default-election-timeout-ms
+           :snapshot-threshold default-snapshot-threshold
            :leader-change-fn leader-change-fn
-           :default-command-timeout (:operation-timeout-ms default-timeouts)}
+           :default-command-timeout config/operation-timeout-ms}
     state-machine-fn (assoc :state-machine state-machine-fn)
     rpc-sender-fn (assoc :send-rpc-fn rpc-sender-fn)))
 
@@ -176,11 +154,10 @@
   
   Returns a map with :op and appropriate parameters for the operation."
   []
-  (let [op-type (rand-nth [:write :read :cas :delete])
+  (let [op-type (rand-nth [:write :read :cas])
         key (name (random-key))
         value (random-value)]
     (case op-type
       :write {:op "write" :key key :value value}
       :read {:op "read" :key key}
-      :cas {:op "cas" :key key :old (random-value) :new value}
-      :delete {:op "delete" :key key})))
+      :cas {:op "cas" :key key :old (random-value) :new value})))

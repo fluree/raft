@@ -17,11 +17,7 @@
   [_test _ctx]
   {:f :cas, :value [(util/random-value) (util/random-value)]})
 
-(defn delete-op
-  "Generate a delete operation."
-  [_test _ctx]
-  {:f :delete})
-
-(def operation-generators
-  "Standard mix of operation generators for testing."
-  [read-op write-op cas-op delete-op])
+;; Standard operations used in tests
+(def read-op-gen read-op)
+(def write-op-gen write-op)
+(def cas-op-gen cas-op)

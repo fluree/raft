@@ -34,7 +34,7 @@
                                           current-node
                                           current-port
                                           command
-                                          1000)]  ; 1 second timeout for faster failures
+                                          config/connection-timeout-ms)]
                          (if-let [redirect (handle-redirect response)]
                            redirect
                            {:result response})

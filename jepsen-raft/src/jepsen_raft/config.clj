@@ -53,23 +53,17 @@
   "Default test duration in seconds."
   60)
 
-;; Network configuration - now delegated to nodes.clj
-(def tcp-ports
-  "TCP port mapping for Raft nodes.
-   DEPRECATED: Use jepsen-raft.nodes/tcp-ports instead."
-  (nodes/tcp-ports))
-
-(def http-ports
-  "HTTP port mapping for client commands.
-   DEPRECATED: Use jepsen-raft.nodes/http-ports instead."
-  (nodes/http-ports))
+;; Network configuration - use nodeconfig directly
+;; For backward compatibility, import these from nodeconfig
+(def tcp-ports nodes/tcp-ports)
+(def http-ports nodes/http-ports)
 
 ;; File paths
 (def log-directory
   "Base directory for Raft logs."
   "/tmp/jepsen-raft-network/")
 
-;; Docker configuration - now delegated to nodes.clj
+;; Docker configuration
 (def docker-compose-file
   "Path to Docker Compose configuration."
   (:compose-file nodes/docker-config))
@@ -78,11 +72,6 @@
   "Path to network partition testing script."
   (or (System/getenv "NETWORK_SCRIPT_PATH")
       "docker/test-network-partition.sh"))
-
-(def node-ready-timeout-ms
-  "Maximum time to wait for a node to become ready.
-   Re-exported from nodes.clj for backward compatibility."
-  (:node-ready-timeout-ms nodes/docker-config))
 
 ;; Performance test configuration
 (def perf-default-timeout-ms
@@ -97,20 +86,4 @@
   "Success rate threshold (%) below which the cluster is considered broken."
   70.0)
 
-(def perf-escalating-configs
-  "Configuration for escalating load test."
-  [;; Warm up
-   {:clients 1 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 2 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 5 :commands 10 :timeout perf-default-timeout-ms}
-   ;; Light load
-   {:clients 10 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 15 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 20 :commands 10 :timeout perf-default-timeout-ms}
-   ;; Medium load  
-   {:clients 30 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 40 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 50 :commands 10 :timeout perf-default-timeout-ms}
-   ;; Heavy load
-   {:clients 75 :commands 10 :timeout perf-default-timeout-ms}
-   {:clients 100 :commands 10 :timeout perf-default-timeout-ms}])
+;; Performance test configuration is now handled by test-performance.clj
