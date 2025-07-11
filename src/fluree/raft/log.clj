@@ -2,9 +2,8 @@
   (:require [clojure.java.io :as io]
             [taoensso.nippy :as nippy]
             [clojure.tools.logging :as log])
-  (:import (java.io EOFException FileNotFoundException DataInputStream RandomAccessFile File)
-           (java.net URI)
-           (java.nio.file CopyOption Files Paths StandardCopyOption)))
+  (:import (java.io EOFException FileNotFoundException RandomAccessFile File)
+           (java.nio.file CopyOption Files StandardCopyOption)))
 
 ;; if an index is not a positive integer (an append-entry), it is one of these special types:
 (def ^:const entry-types {:current-term -1 ;; record of the latest term we've seen
@@ -238,7 +237,7 @@
         (cond
           (= index idx)
           (let [ba   (byte-array next-bytes)
-                term (.readLong raf)]
+                _    (.readLong raf)]
             (.read raf ba)
             (.close raf)
             (nippy/thaw ba))
@@ -260,7 +259,7 @@
 
 (defn read-entry-range
   "Reads index from start-index (inclusive) to end-index (inclusive)."
-  ([^File file start-index] (read-entry-range file start-index (Long/MAX_VALUE)))
+  ([^File file start-index] (read-entry-range file start-index Long/MAX_VALUE))
   ([^File file start-index end-index]
    (let [raf (RandomAccessFile. file "r")
          len (.length raf)]
@@ -274,7 +273,7 @@
            (cond
              (<= start-index idx end-index)
              (let [ba   (byte-array next-bytes)
-                   term (.readLong raf)]
+                   _    (.readLong raf)]
                (.read raf ba)
                (recur (conj acc (nippy/thaw ba))))
 
@@ -287,9 +286,8 @@
              ;; not there yet, keep seeking
              (< idx start-index)
              (let [next-pointer (long (+ (.getFilePointer raf) 8 next-bytes))]
-               (do
-                 (.seek raf next-pointer)
-                 (recur acc))))))))))
+               (.seek raf next-pointer)
+               (recur acc)))))))))
 
 (def ^:private index->term-cache (atom {}))
 (def ^{:private true :const true} cache-size 10)
@@ -419,7 +417,7 @@
   (log/debug "Rotate log called. Raft state: " raft-state)
   (let [{:keys [config snapshot-index snapshot-term voted-for term index log-file]} raft-state
         {:keys [log-directory log-history]} config
-        entries-post-snapshot (read-entry-range log-file (inc snapshot-index))
+        entries-post-snapshot (read-entry-range log-file (inc snapshot-index) index)
         all-logs              (all-log-indexes log-directory "raft")
         max-log-n             (when (not-empty all-logs) (apply max all-logs))
         next-log-n            (if max-log-n

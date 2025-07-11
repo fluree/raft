@@ -145,12 +145,13 @@
     (if (< term (:term raft-state))
       ;; old term!
       (do (safe-callback callback {:term (:term raft-state) :success false})
-          raft-state))
-    (do (safe-callback callback {:term (:term raft-state) :success true})
+          raft-state)
+      (do
+        (safe-callback callback {:term (:term raft-state) :success true})
         (assoc raft-state :pending-server (merge server-state-baseline
                                                  {:id server
                                                   :op op
-                                                  :command-id command-id})))))
+                                                  :command-id command-id}))))))
 
 (defn conj-distinct
   [val add]
@@ -166,8 +167,8 @@
          _ (log/info (str "Committing " server " " (subs (str op) 1)
                           " to the network configuration. Change command id: " command-id))
          raft-state* (assoc raft-state :pending-server nil)]
-     (do (safe-callback callback {:term (:term raft-state*) :success true})
-         (condp = op
+     (safe-callback callback {:term (:term raft-state*) :success true})
+     (condp = op
            :add (if (= (:this-server raft-state) server)
                   raft-state*
                   (-> raft-state*
@@ -186,7 +187,7 @@
                      (-> raft-state*
                          (assoc-in [:config :servers] cfg-servers*)
                          (assoc-in [:other-servers] other-servers*)
-                         (assoc-in [:servers] servers))))))))
+                         (assoc-in [:servers] servers)))))))
 
 (defn update-commits
   "Process new commits if leader-commit is updated.
@@ -243,7 +244,7 @@
       (callback {:term (:term raft-state) :success false})
       raft-state)
     ;; current or newer term
-    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit instant]} args
+    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
           proposed-term          (:term args)
           proposed-new-index     (+ prev-log-index (count entries))
           {:keys [term index latest-index snapshot-index leader]} raft-state
@@ -284,32 +285,28 @@
 
                                          ;; we have a log match at prev-log-index
                                    (and logs-match? (not-empty entries))
-                                   (#(do
-                                       (if (or (= index prev-log-index) new-leader?)
-
-                                               ;; new entries, so add. If new leader, possibly over-write existing entries
-                                         (raft-log/append (:log-file %) entries prev-log-index index)
-
-                                               ;; Possibly new entries and no leader change.
-                                               ;; At least some of these entries duplicate ones already received.
-                                               ;; Happens when round-trip response doesn't complete prior to new updates being sent
-                                         (let [new-entries-n (- proposed-new-index index)
-                                               new-entries   (take-last new-entries-n entries)]
-                                           (when new-entries
-                                             (raft-log/append (:log-file %) new-entries index index))))
-
-                                             ;; as an optimization, we will cache last entry as it will likely be requested next
-                                       (raft-log/assoc-index->term-cache proposed-new-index (:term (last entries)))
-
-                                       (assoc % :index proposed-new-index
-                                              :latest-index (max proposed-new-index latest-index))))
+                                   (fn [%]
+                                     (if (or (= index prev-log-index) new-leader?)
+                                       ;; new entries, so add. If new leader, possibly over-write existing entries
+                                       (raft-log/append (:log-file %) entries prev-log-index index)
+                                       ;; Possibly new entries and no leader change.
+                                       ;; At least some of these entries duplicate ones already received.
+                                       ;; Happens when round-trip response doesn't complete prior to new updates being sent
+                                       (let [new-entries-n (- proposed-new-index index)
+                                             new-entries   (take-last new-entries-n entries)]
+                                         (when new-entries
+                                           (raft-log/append (:log-file %) new-entries index index))))
+                                     ;; as an optimization, we will cache last entry as it will likely be requested next
+                                     (raft-log/assoc-index->term-cache proposed-new-index (:term (last entries)))
+                                     (assoc % :index proposed-new-index
+                                            :latest-index (max proposed-new-index latest-index)))
 
 ;; we have an entry at prev-log-index, but doesn't match term, remove offending entries
                                    (and (not logs-match?) term-at-prev-log-index)
-                                   (#(do
-                                       (raft-log/remove-entries (:log-file %) prev-log-index)
-                                       (assoc % :index (dec prev-log-index)
-                                              :latest-index (max proposed-new-index latest-index))))
+                                   (fn [%]
+                                     (raft-log/remove-entries (:log-file %) prev-log-index)
+                                     (assoc % :index (dec prev-log-index)
+                                            :latest-index (max proposed-new-index latest-index)))
 
                                          ;; Check if commit is newer and process into state machine if needed
                                    logs-match?
