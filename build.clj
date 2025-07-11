@@ -3,7 +3,7 @@
             [clojure.string :as str]))
 
 (def lib 'com.fluree/raft)
-(def version (format "1.0.%s" (b/git-count-revs nil)))
+(def version "1.0.0")
 (def class-dir "target/classes")
 (def basis (b/create-basis {:project "deps.edn"}))
 (def jar-file (format "target/%s-%s.jar" (name lib) version))
