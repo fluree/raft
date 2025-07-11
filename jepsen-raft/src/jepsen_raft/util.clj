@@ -48,8 +48,9 @@
     Function that processes operations and returns results"
   [state-atom]
   (fn [entry _raft-state]
-    (debug "State machine received entry:" entry)
+    (debug "State machine received entry:" entry "key type:" (type (:key entry)))
     (let [{:keys [op key value old new]} entry]
+      (debug "Processing op:" op "key:" key "key-type:" (type key) "current-state:" @state-atom)
       (cond
         ;; Handle nil or missing op
         (nil? op)
@@ -147,12 +148,12 @@
   [conflicts]
   (let [conflict-details (for [conflict conflicts
                                :let [{:keys [node port processes]} conflict]]
-                           (str "  - Node " node " port " port 
+                           (str "  - Node " node " port " port
                                 (when (seq processes)
-                                  (str " (used by: " 
-                                       (clojure.string/join ", " 
-                                                           (map #(str (:command %) " [PID " (:pid %) "]") 
-                                                                processes)) 
+                                  (str " (used by: "
+                                       (clojure.string/join ", "
+                                                            (map #(str (:command %) " [PID " (:pid %) "]")
+                                                                 processes))
                                        ")"))))]
     (str "Port conflicts detected:\n"
          (clojure.string/join "\n" conflict-details)

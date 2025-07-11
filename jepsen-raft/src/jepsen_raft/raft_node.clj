@@ -605,7 +605,9 @@
   "Prepare command from HTTP request body."
   [request]
   (let [body (parse-request-body request)]
-    (update body :op keyword)))
+    (-> body
+        (update :op keyword)
+        (update :key keyword))))
 
 (defn- build-debug-response
   "Build debug response with node and Raft state."
@@ -628,33 +630,33 @@
                   "at" leader-host ":" leader-port)
         (let [url (str "http://" leader-host ":" leader-port "/command")
             ;; Forward with same content-type as original request
-            response (if (= content-type "application/octet-stream")
+              response (if (= content-type "application/octet-stream")
                        ;; Nippy format
-                       (clj-http.client/post url
-                                             {:body (nippy/freeze command)
-                                              :headers {"Content-Type" "application/octet-stream"}
-                                              :as :byte-array
-                                              :socket-timeout http-socket-timeout-ms
-                                              :connection-timeout http-connection-timeout-ms
-                                              :throw-exceptions false})
+                         (clj-http.client/post url
+                                               {:body (nippy/freeze command)
+                                                :headers {"Content-Type" "application/octet-stream"}
+                                                :as :byte-array
+                                                :socket-timeout http-socket-timeout-ms
+                                                :connection-timeout http-connection-timeout-ms
+                                                :throw-exceptions false})
                        ;; JSON format
-                       (clj-http.client/post url
-                                             {:body (json/write-str command)
-                                              :content-type :json
-                                              :accept :json
-                                              :as :json
-                                              :socket-timeout http-socket-timeout-ms
-                                              :connection-timeout http-connection-timeout-ms
-                                              :throw-exceptions false}))]
-        (if (= 200 (:status response))
-          (let [result (if (= content-type "application/octet-stream")
-                         (nippy/thaw (:body response))
-                         (:body response))]
-            (log/debug "Leader forward successful:" result)
-            result)
-          (do
-            (log/warn "Leader forward failed with status" (:status response))
-            {:type :fail :error "Leader forward failed"}))))
+                         (clj-http.client/post url
+                                               {:body (json/write-str command)
+                                                :content-type :json
+                                                :accept :json
+                                                :as :json
+                                                :socket-timeout http-socket-timeout-ms
+                                                :connection-timeout http-connection-timeout-ms
+                                                :throw-exceptions false}))]
+          (if (= 200 (:status response))
+            (let [result (if (= content-type "application/octet-stream")
+                           (nippy/thaw (:body response))
+                           (:body response))]
+              (log/debug "Leader forward successful:" result)
+              result)
+            (do
+              (log/warn "Leader forward failed with status" (:status response))
+              {:type :fail :error "Leader forward failed"}))))
       (catch Exception e
         (log/error e "Failed to forward command to leader")
         {:type :fail :error "Leader forward error"}))
@@ -787,12 +789,16 @@
                     :join? false}))
 
 (defn- build-http-host-map
-  "Build HTTP host map from node IP mapping or fallback to localhost."
+  "Build HTTP host map for client connections.
+   In Docker mode: always use localhost (ports are forwarded)
+   In non-Docker mode: use node names as hostnames"
   [node-ip-map nodes]
   (if node-ip-map
-    ;; In Docker, nodes need to use container names to reach each other
-    (into {} (for [id nodes] [id id]))
-    (into {} (for [id nodes] [id "localhost"]))))
+    ;; Docker mode: Use localhost for all HTTP client connections
+    ;; because Docker forwards container ports to host
+    (into {} (for [id nodes] [id "localhost"]))
+    ;; Non-Docker mode: node names are hostnames
+    (into {} (for [id nodes] [id id]))))
 
 (defn- cleanup-node-resources!
   "Clean up all node resources during shutdown."

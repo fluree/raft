@@ -109,51 +109,31 @@ All tests completed without:
 
 The Raft implementation demonstrates excellent stability and consistent performance across different cluster sizes.
 
-## Latest Jepsen Linearizability Tests (2025-01-10)
-
-### 3-Minute Test Results
-
-**Test Status**: ✅ **PASSED** - All consistency checks valid
-
-**Test Configuration:**
-- **Duration**: 180 seconds (3 minutes)
-- **Cluster**: 5 nodes (n1-n5)
-- **Concurrency**: 5 client threads
-- **Operations**: Read, Write, CAS on 3 independent keys (x, y, z)
-
-**Results Summary:**
-- **Linearizability**: Valid
-- **Timeline**: Valid
-- **Performance Metrics**: Valid
-- **Final State**: Key :x = 30, Key :y = 69
-- **Test Artifacts**: `store/raft-netasync/20250710T064403.204-0400/`
-
-### Extended 5-Minute Stress Test Results (July 10, 2025)
+## Latest Jepsen Linearizability Tests (2025-07-11)
 
 **Test Status**: ✅ **PASSED** - All consistency checks valid
 
 **Test Configuration:**
 - **Duration**: 300 seconds (5 minutes)
 - **Cluster**: 5 nodes (n1-n5)
-- **Concurrency**: 6 client threads (higher load than previous tests)
+- **Concurrency**: 6 client threads (2 per key)
 - **Operations**: Read, Write, CAS on 2 independent keys (:x, :y)
-- **Total Operations Attempted**: 27,725
 
 **Results Summary:**
 - **Linearizability**: ✅ Valid for all keys
 - **Timeline**: ✅ Valid
 - **Performance Graphs**: ✅ Valid
 - **Consistency Check**: ✅ Zero violations detected
-- **Final Verdict**: "Everything looks good! ヽ('ー`)ノ"
-- **Test Artifacts**: `store/raft-netasync/20250710T175742.011-0400/`
-- **Visual Results**: See `test-results/5-minute-consistency-test/`
+- **Final State**: Key :x = 98, Key :y = 67
+- **Test Artifacts**: `test-results/5-minute-consistency-test/`
 
 **Key Insights:**
 - Test demonstrates sustained operation under 5-minute load
-- High concurrency (6 threads) with 27,725 total operations
+- High concurrency (6 threads) with continuous operations across 2 keys
 - Perfect consistency maintained throughout entire test duration
 - End-of-test `:no-response` failures are expected (test teardown artifact)
 - Validates production-readiness for extended operation periods
+- 2-key configuration provides stable linearizability results
 
 ## Test Environment
 

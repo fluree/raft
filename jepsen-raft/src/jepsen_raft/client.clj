@@ -4,12 +4,13 @@
             [jepsen [client :as client]
              [independent :as independent]]
             [jepsen-raft.config :as config]
-            [jepsen-raft.http-client :as http-client]))
+            [jepsen-raft.http-client :as http-client]
+            [jepsen-raft.nodeconfig :as nodes]))
 
 (defn- node->port
   "Get HTTP port for a node."
   [node]
-  (get config/http-ports node 7000))
+  (nodes/get-http-port node))
 
 (defn- handle-redirect
   "Handle redirect response from server."
@@ -48,7 +49,8 @@
             (let [url (:redirect result)
                   [_ port-str] (re-find #":(\d+)" url)
                   new-port (Integer/parseInt port-str)
-                  new-node (some (fn [[n p]] (when (= p new-port) n)) config/http-ports)]
+                  new-node (some (fn [node] (when (= (nodes/get-http-port node) new-port) node))
+                                 ["n1" "n2" "n3" "n4" "n5" "n6" "n7"])]
               (recur new-node new-port (inc redirects)))
             (:result result)))))))
 

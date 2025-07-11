@@ -70,7 +70,7 @@
   "Start the dockerized net.async cluster."
   []
   (util/log-node-operation "Starting" "dockerized net.async cluster")
-  
+
   ;; Check ports before starting containers
   (info "Checking for port conflicts...")
   (check-ports-available)
