@@ -77,6 +77,18 @@ check-nodes: ## Check if net.async nodes are running and healthy
 		fi; \
 	done
 
+.PHONY: check-ports
+check-ports: ## Check if all required ports are available
+	@echo "🔍 Checking port availability..."
+	@for port in 7001 7002 7003 7004 7005 9001 9002 9003 9004 9005; do \
+		if lsof -i :$$port >/dev/null 2>&1; then \
+			process=$$(lsof -i :$$port | tail -n +2 | awk '{print $$1 " [PID " $$2 "]"}' | head -1); \
+			echo "  ❌ Port $$port: In use by $$process"; \
+		else \
+			echo "  ✅ Port $$port: Available"; \
+		fi; \
+	done
+
 .PHONY: logs
 logs: ## Tail logs for all running nodes
 	@tail -f logs/*.log 2>/dev/null || echo "No log files found. Start nodes first with 'make start-nodes'"

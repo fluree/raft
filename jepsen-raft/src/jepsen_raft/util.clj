@@ -1,6 +1,8 @@
 (ns jepsen-raft.util
   "Shared utilities for Jepsen Raft tests"
   (:require [clojure.tools.logging :refer [info debug]]
+            [clojure.java.shell]
+            [clojure.string]
             [jepsen-raft.config :as config]
             [jepsen-raft.nodeconfig :as nodes]))
 
@@ -99,6 +101,65 @@
       true)
     (catch java.net.BindException _
       false)))
+
+(defn find-process-using-port
+  "Find what process is using a specific port (macOS/Linux)."
+  [port]
+  (try
+    (let [result (clojure.java.shell/sh "lsof" "-ti" (str ":" port))]
+      (when (zero? (:exit result))
+        (let [pids (clojure.string/split (clojure.string/trim (:out result)) #"\n")]
+          (for [pid pids
+                :when (not (clojure.string/blank? pid))]
+            (let [ps-result (clojure.java.shell/sh "ps" "-p" pid "-o" "comm=")]
+              (when (zero? (:exit ps-result))
+                {:pid pid :command (clojure.string/trim (:out ps-result))}))))))
+    (catch Exception _
+      nil)))
+
+(defn check-port-with-process-info
+  "Check if port is available and provide info about what's using it if not."
+  [port]
+  (if (check-port-available port)
+    {:available? true}
+    {:available? false
+     :port port
+     :processes (find-process-using-port port)}))
+
+(defn check-all-node-ports
+  "Check if all ports for a list of nodes are available.
+   Returns {:all-available? true} if all ports are free,
+   or {:all-available? false :conflicts [...]} with details about conflicts."
+  [nodes]
+  (let [port-checks (for [node nodes
+                          :let [{:keys [tcp http]} (node->ports node)]
+                          port [tcp http]
+                          :let [port-info (check-port-with-process-info port)]
+                          :when (not (:available? port-info))]
+                      (assoc port-info :node node))]
+    (if (empty? port-checks)
+      {:all-available? true}
+      {:all-available? false
+       :conflicts port-checks})))
+
+(defn format-port-conflict-error
+  "Format a user-friendly error message for port conflicts."
+  [conflicts]
+  (let [conflict-details (for [conflict conflicts
+                               :let [{:keys [node port processes]} conflict]]
+                           (str "  - Node " node " port " port 
+                                (when (seq processes)
+                                  (str " (used by: " 
+                                       (clojure.string/join ", " 
+                                                           (map #(str (:command %) " [PID " (:pid %) "]") 
+                                                                processes)) 
+                                       ")"))))]
+    (str "Port conflicts detected:\n"
+         (clojure.string/join "\n" conflict-details)
+         "\n\nTo resolve:\n"
+         "  1. Stop existing processes: make stop-nodes\n"
+         "  2. Or kill specific processes: pkill -f jepsen-raft.raft-node\n"
+         "  3. Or use different ports in your configuration")))
 
 (defn log-node-operation
   "Standardized logging for node operations"
