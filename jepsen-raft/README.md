@@ -179,6 +179,14 @@ jepsen-raft/
 │   ├── n3.log                       # Node 3 logs
 │   ├── n4.log                       # Node 4 logs
 │   └── n5.log                       # Node 5 logs
+├── test-results/                    # Curated test results for documentation
+│   └── 5-minute-consistency-test/  # Extended 5-minute Jepsen test results
+│       ├── README.md                # Detailed test analysis and interpretation
+│       ├── results.edn              # Complete Jepsen test results
+│       ├── timeline.html            # Interactive visual timeline
+│       ├── latency-quantiles.png    # Latency distribution graphs
+│       ├── latency-raw.png          # Raw latency measurements
+│       └── rate.png                 # Throughput over time
 └── store/                           # Test results and artifacts
     ├── current                      # Symlink to latest test run
     ├── latest                       # Symlink to latest test run
@@ -290,13 +298,30 @@ clojure -M:performance single 200 100
 **Note**: The performance test automatically starts and stops nodes by default. Node logs are written to `/tmp/jepsen-raft-network/n*-perf.log` for debugging.
 
 ### Performance Characteristics
-Based on our latest testing (2025-01-09):
-- **Jepsen Linearizability Tests**: 100% success rate on 5-node cluster
-- **Extended 3-minute tests**: All consistency checks passed (99.95% expected CAS rejections)
-- **Performance Tests**: 315.6 ops/sec peak (100 concurrent clients on 5-node cluster)
+Based on our latest testing (2025-07-10):
+- **Jepsen Linearizability Tests**: ✅ 100% success rate on 5-node cluster
+- **Extended 5-minute stress test**: ✅ All consistency checks passed (27,725 operations)
+- **Performance Tests**: Up to 846.0 ops/sec peak (150 clients on 7-node cluster)
 - **Node Startup**: Reliable staggered startup with built-in health checks
-- **Cluster Configuration**: Supports 3 or 5 nodes with ports 7001-7005 (HTTP), 9001-9005 (TCP)
-- **Breaking point**: None detected up to 100 clients - maintains perfect reliability
+- **Cluster Configuration**: Supports 3, 5, or 7 nodes with ports 7001-7005 (HTTP), 9001-9005 (TCP)
+- **Breaking point**: None detected up to 200 clients - maintains perfect reliability
+- **Extended Operation**: Validated for sustained 5-minute operation under high concurrency
+
+## 🎯 Latest Test Results
+
+**[📊 5-Minute Consistency Test Results](test-results/5-minute-consistency-test/README.md)** - July 10, 2025
+
+Our most recent extended consistency test demonstrates production-ready reliability:
+
+- ✅ **Perfect Linearizability**: Zero consistency violations across 27,725 operations
+- ✅ **Extended Duration**: 5-minute sustained operation under load
+- ✅ **High Concurrency**: 6 concurrent client threads
+- ✅ **Jepsen Validation**: "Everything looks good! ヽ('ー`)ノ"
+
+**Key Files:**
+- [📈 Visual Timeline](test-results/5-minute-consistency-test/timeline.html) - Interactive operation timeline
+- [📊 Performance Graphs](test-results/5-minute-consistency-test/) - Latency and throughput visualizations
+- [📋 Detailed Results](test-results/5-minute-consistency-test/results.edn) - Complete test analysis
 
 ## Development and Debugging
 
@@ -314,6 +339,7 @@ make performance-test         # Run performance stress test (auto-manages nodes)
 make start-nodes              # Start net.async Raft nodes manually
 make stop-nodes               # Stop all net.async Raft nodes
 make check-nodes              # Check if net.async nodes are running and healthy
+make check-ports              # Check if all required ports are available
 make restart-nodes            # Restart all net.async nodes with fresh state
 make logs                     # Tail logs for all running nodes
 

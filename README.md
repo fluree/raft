@@ -39,7 +39,6 @@ Using Git dependency (for latest development version)
                      :git/sha "904d915"}}} ; use latest commit SHA
 ```
 
-
 ## Validation & Performance
 
 This Raft implementation has been validated with [Jepsen](https://jepsen.io/) for correctness and performance.
