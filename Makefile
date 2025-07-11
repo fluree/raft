@@ -36,3 +36,44 @@ deploy: target/fluree-raft.jar ## Deploy JAR to Clojars
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf target
+	rm -rf scanning_results
+
+# Linting targets
+.PHONY: lint
+lint: ## Run clj-kondo linter
+	clojure -M:clj-kondo --lint src
+
+.PHONY: lint-ci
+lint-ci: ## Run clj-kondo for CI (fail on warnings)
+	clojure -M:clj-kondo --lint src --fail-level warning
+
+# Formatting targets  
+.PHONY: fmt
+fmt: ## Format code with cljfmt
+	clojure -M:cljfmt fix
+
+.PHONY: fmt-check
+fmt-check: ## Check code formatting
+	clojure -M:cljfmt check
+
+# Code analysis
+.PHONY: eastwood
+eastwood: ## Run Eastwood linter
+	mkdir -p scanning_results
+	clojure -M:eastwood
+
+.PHONY: ancient
+ancient: ## Check for outdated dependencies
+	clojure -M:ancient
+
+# Coverage
+.PHONY: coverage
+coverage: ## Run tests with code coverage
+	clojure -M:coverage
+
+# Combined targets
+.PHONY: check
+check: lint fmt-check test ## Run all checks (lint, format, test)
+
+.PHONY: ci
+ci: check eastwood ## Run full CI suite locally

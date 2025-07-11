@@ -16,22 +16,17 @@
          :main-opts   ["-m" "cognitect.test-runner"]}
 
         :jar
-        {:extra-deps {com.github.seancorfield/depstar {:mvn/version "2.1.303"}}
-         :exec-fn    hf.depstar/jar
-         :exec-args  {:jar "target/fluree-raft.jar"}}
+        {:deps {io.github.clojure/tools.build {:git/sha "8e78bcc"}}
+         :ns-default build}
 
         :install
-        {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
-         :exec-fn    deps-deploy.deps-deploy/deploy
-         :exec-args  {:installer :local
-                      :artifact  "target/fluree-raft.jar"}}
+        {:deps {io.github.clojure/tools.build {:git/sha "8e78bcc"}}
+         :ns-default build}
         
         :deploy
-        {:extra-deps {slipset/deps-deploy {:mvn/version "RELEASE"}}
-         :exec-fn    deps-deploy.deps-deploy/deploy
-         :exec-args  {:installer      :remote
-                      :sign-releases? true
-                      :artifact       "target/fluree-raft.jar"}}
+        {:deps {io.github.clojure/tools.build {:git/sha "8e78bcc"}
+                slipset/deps-deploy {:mvn/version "RELEASE"}}
+         :ns-default build}
         
         :coverage
         {:extra-paths ["test"]
@@ -48,4 +43,8 @@
 
         :clj-kondo
         {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.05.26"}}
-         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "--config" ".clj-kondo/config.edn"]}}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src" "--config" ".clj-kondo/config.edn"]}
+        
+        :cljfmt
+        {:extra-deps {cljfmt/cljfmt {:mvn/version "0.10.5"}}
+         :main-opts ["-m" "cljfmt.main"]}}}
