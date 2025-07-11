@@ -147,12 +147,12 @@
   [conflicts]
   (let [conflict-details (for [conflict conflicts
                                :let [{:keys [node port processes]} conflict]]
-                           (str "  - Node " node " port " port 
+                           (str "  - Node " node " port " port
                                 (when (seq processes)
-                                  (str " (used by: " 
-                                       (clojure.string/join ", " 
-                                                           (map #(str (:command %) " [PID " (:pid %) "]") 
-                                                                processes)) 
+                                  (str " (used by: "
+                                       (clojure.string/join ", "
+                                                            (map #(str (:command %) " [PID " (:pid %) "]")
+                                                                 processes))
                                        ")"))))]
     (str "Port conflicts detected:\n"
          (clojure.string/join "\n" conflict-details)
