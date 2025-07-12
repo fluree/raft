@@ -107,23 +107,15 @@
 
       (catch Exception ex
         (let [data (ex-data ex)
-              error-type (:type data)]
-          (case error-type
-            :timeout
-            (assoc op :type :info :error :timeout)
-
-            :connection-refused
-            (assoc op :type :fail :error :connection-refused)
-
-            :no-leader
-            (assoc op :type :fail :error :no-leader)
-
-            :too-many-redirects
-            (assoc op :type :fail :error :too-many-redirects)
-
-            :no-response
-            (assoc op :type :fail :error :no-response)
-
+              error-type (:type data)
+              error-mappings {:timeout            {:type :info :error :timeout}
+                              :connection-refused {:type :fail :error :connection-refused}
+                              :no-leader          {:type :fail :error :no-leader}
+                              :too-many-redirects {:type :fail :error :too-many-redirects}
+                              :no-response        {:type :fail :error :no-response}}
+              error-result (get error-mappings error-type)]
+          (if error-result
+            (merge op error-result)
             ;; Default case for unexpected errors
             (do
               (error ex "Unexpected error")
