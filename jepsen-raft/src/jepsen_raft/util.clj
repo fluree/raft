@@ -49,24 +49,24 @@
   [state-atom]
   (fn [entry _raft-state]
     (debug "State machine received entry:" entry "key type:" (type (:key entry)))
-    (let [{:keys [op key value old new]} entry]
-      (debug "Processing op:" op "key:" key "key-type:" (type key) "current-state:" @state-atom)
+    (let [{:keys [f key value old new]} entry]
+      (debug "Processing f:" f "key:" key "key-type:" (type key) "current-state:" @state-atom)
       (cond
-        ;; Handle nil or missing op
-        (nil? op)
-        (do (debug "State machine received entry with nil op:" entry)
+        ;; Handle nil or missing f
+        (nil? f)
+        (do (debug "State machine received entry with nil f:" entry)
             (ok-result))  ; Return ok for internal Raft operations
 
         ;; Standard operations
-        (= op :write)
+        (= f :write)
         (do
           (swap! state-atom assoc key value)
           (ok-result))
 
-        (= op :read)
+        (= f :read)
         (ok-result (get @state-atom key))
 
-        (= op :cas)
+        (= f :cas)
         (let [current-value (get @state-atom key)]
           (debug "CAS operation: key=" key "old=" old "new=" new "current-value=" current-value "state=" @state-atom)
           (if (= current-value old)
@@ -80,8 +80,8 @@
 
         ;; Unknown operation
         :else
-        (do (debug "State machine received unknown op:" op "in entry:" entry)
-            (fail-result (str "Unknown operation: " op)))))))
+        (do (debug "State machine received unknown f:" f "in entry:" entry)
+            (fail-result (str "Unknown operation: " f)))))))
 
 ;; =============================================================================
 ;; Node Management
@@ -221,6 +221,6 @@
         key (name (random-key))
         value (random-value)]
     (case op-type
-      :write {:op "write" :key key :value value}
-      :read {:op "read" :key key}
-      :cas {:op "cas" :key key :old (random-value) :new value})))
+      :write {:f :write :key key :value value}
+      :read {:f :read :key key}
+      :cas {:f :cas :key key :old (random-value) :new value})))

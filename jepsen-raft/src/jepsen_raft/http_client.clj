@@ -2,7 +2,8 @@
   "Common HTTP client utilities for Raft nodes"
   (:require [clj-http.client :as http]
             [clojure.data.json :as json]
-            [clojure.tools.logging :as log]))
+            [clojure.tools.logging :as log]
+            [taoensso.nippy :as nippy]))
 
 (defn- node->url
   "Convert node and port to URL"
@@ -34,10 +35,12 @@
         response (with-timeout
                    http/post
                    url
-                   {:body (json/write-str command)
+                   {:body (nippy/freeze command)
+                    :headers {"Content-Type" "application/octet-stream"}
+                    :as :byte-array
                     :socket-timeout timeout-ms})]
     (when (= 200 (:status response))
-      (json/read-str (:body response) :key-fn keyword))))
+      (nippy/thaw (:body response)))))
 
 (defn check-health
   "Check node health status"

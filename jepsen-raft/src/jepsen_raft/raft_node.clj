@@ -616,12 +616,14 @@
   "Prepare command from HTTP request body."
   [request]
   (let [body (parse-request-body request)
-        op-keyword (keyword (:op body))]
-    (-> body
-        (update :key keyword)
-        ;; Convert :op to :f for Raft state machine compatibility
-        (assoc :f op-keyword)
-        (dissoc :op))))
+        content-type (get-in request [:headers "content-type"])]
+    (if (= content-type "application/octet-stream")
+      ;; Nippy already preserves types
+      body
+      ;; JSON needs conversion of string values to keywords
+      (-> body
+          (update :f keyword)
+          (update :key keyword)))))
 
 (defn- build-debug-response
   "Build debug response with node and Raft state."
@@ -699,7 +701,7 @@
         command (prepare-command-from-request request)
         current-state (get-current-raft-state raft-instance raft-state-timeout-ms)
         node-id (get current-state :server-id "unknown")]
-    (log/info "COMMAND_REQUEST:" node-id "op=" (:f command) "key=" (:key command) 
+    (log/info "COMMAND_REQUEST:" node-id "f=" (:f command) "key=" (:key command) 
               "status=" (:status current-state) "term=" (:term current-state) 
               "commit=" (:commit current-state) "index=" (:index current-state)
               "timestamp=" (System/currentTimeMillis))
@@ -770,10 +772,9 @@
 
         ;; Normal application operations with :f field
         (:f entry)
-        (let [converted-entry (-> entry (assoc :op (:f entry)) (dissoc :f))
-              result (base-state-machine converted-entry raft-state)]
-          (log/info "STATE_APPLY:" node-id "op=" (:op converted-entry) "key=" (:key converted-entry) 
-                    "value=" (:value converted-entry) "result-type=" (:type result) "result-value=" (:value result)
+        (let [result (base-state-machine entry raft-state)]
+          (log/info "STATE_APPLY:" node-id "f=" (:f entry) "key=" (:key entry) 
+                    "value=" (:value entry) "result-type=" (:type result) "result-value=" (:value result)
                     "applied-index" applied-index "commit-index" commit-index "timestamp=" apply-timestamp)
           result)
 

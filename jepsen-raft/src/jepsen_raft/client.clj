@@ -75,25 +75,25 @@
       (let [[k operation-value] (:value op)
             result (case (:f op)
                      :read
-                     (let [cmd-result (send-command! node {:op :read :key k})]
+                     (let [cmd-result (send-command! node {:f :read :key k})]
                        (handle-command-result cmd-result {:value (:value cmd-result)}))
 
                      :write
-                     (let [cmd-result (send-command! node {:op :write
+                     (let [cmd-result (send-command! node {:f :write
                                                            :key k
                                                            :value operation-value})]
                        (handle-command-result cmd-result))
 
                      :cas
                      (let [[old new] operation-value
-                           cmd-result (send-command! node {:op :cas
+                           cmd-result (send-command! node {:f :cas
                                                            :key k
                                                            :old old
                                                            :new new})]
                        (handle-command-result cmd-result))
 
                      :delete
-                     (let [cmd-result (send-command! node {:op :delete :key k})]
+                     (let [cmd-result (send-command! node {:f :delete :key k})]
                        (handle-command-result cmd-result))
 
                      ;; Unknown operation
