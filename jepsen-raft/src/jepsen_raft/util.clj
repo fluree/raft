@@ -185,7 +185,8 @@
                                leader-change-fn]
                         :or {log-dir (str config/log-directory node-id "/")
                              leader-change-fn (fn [event]
-                                                (info node-id "leader change:" event))}}]
+                                                (let [timestamp (System/currentTimeMillis)]
+                                                  (info "LEADER_CHANGE:" node-id "event=" event "timestamp=" timestamp)))}}]
   (cond-> {:servers all-nodes
            :this-server node-id
            :log-directory log-dir
