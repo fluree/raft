@@ -59,7 +59,7 @@
   [cmd-result & [success-value]]
   (cond
     (nil? cmd-result) {:error :no-response}
-    (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
+    (or (= "fail" (:type cmd-result)) (= :fail (:type cmd-result))) {:error (:error cmd-result)}
     :else (or success-value {})))
 
 (defrecord NetAsyncClient [node]

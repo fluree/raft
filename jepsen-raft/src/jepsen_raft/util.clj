@@ -1,6 +1,6 @@
 (ns jepsen-raft.util
   "Shared utilities for Jepsen Raft tests"
-  (:require [clojure.tools.logging :refer [info debug]]
+  (:require [clojure.tools.logging :refer [info]]
             [clojure.java.shell]
             [clojure.string]
             [jepsen-raft.config :as config]
@@ -47,15 +47,12 @@
   Returns:
     Function that processes operations and returns results"
   [state-atom]
-  (fn [entry _raft-state]
-    (debug "State machine received entry:" entry "key type:" (type (:key entry)))
+  (fn [entry raft-state]
     (let [{:keys [f key value old new]} entry]
-      (debug "Processing f:" f "key:" key "key-type:" (type key) "current-state:" @state-atom)
       (cond
         ;; Handle nil or missing f
         (nil? f)
-        (do (debug "State machine received entry with nil f:" entry)
-            (ok-result))  ; Return ok for internal Raft operations
+        (ok-result)  ; Return ok for internal Raft operations
 
         ;; Standard operations
         (= f :write)
@@ -64,24 +61,20 @@
           (ok-result))
 
         (= f :read)
-        (ok-result (get @state-atom key))
+        (let [current-value (get @state-atom key)]
+          (ok-result current-value))
 
         (= f :cas)
         (let [current-value (get @state-atom key)]
-          (debug "CAS operation: key=" key "old=" old "new=" new "current-value=" current-value "state=" @state-atom)
           (if (= current-value old)
             (do
               (swap! state-atom assoc key new)
-              (debug "CAS succeeded: key=" key "old=" old "new=" new "new-state=" @state-atom)
               (ok-result))
-            (let [failure-result (fail-result :cas-failed)]
-              (debug "CAS failed: key=" key "expected=" old "actual=" current-value "equal?=" (= current-value old) "returning=" failure-result)
-              failure-result)))
+            (fail-result :cas-failed)))
 
         ;; Unknown operation
         :else
-        (do (debug "State machine received unknown f:" f "in entry:" entry)
-            (fail-result (str "Unknown operation: " f)))))))
+        (fail-result (str "Unknown operation: " f))))))
 
 ;; =============================================================================
 ;; Node Management
