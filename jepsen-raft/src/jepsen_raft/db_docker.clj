@@ -155,17 +155,19 @@
 
     ;; Use locking to ensure proper teardown
     (locking docker-setup-lock
-      (swap! teardown-counter inc)
+      ;; Only count teardowns when docker is actually started
+      (when @docker-started?
+        (swap! teardown-counter inc)
+        (info "Teardown count:" @teardown-counter "of" (count (:nodes test)))
 
-      ;; Stop Docker containers only after all nodes have been torn down
-      (when (and @docker-started?
-                 (= @teardown-counter (count (:nodes test))))
-        (util/log-node-operation "Stopping dockerized cluster after all teardowns" node)
-        (stop-dockerized-cluster!)
-        (reset! docker-started? false)
-        (reset! setup-counter 0)
-        (reset! teardown-counter 0)
-        (info "Docker cluster stopped successfully"))))
+        ;; Stop Docker containers only after all nodes have been torn down
+        (when (= @teardown-counter (count (:nodes test)))
+          (util/log-node-operation "Stopping dockerized cluster after all teardowns" node)
+          (stop-dockerized-cluster!)
+          (reset! docker-started? false)
+          (reset! setup-counter 0)
+          (reset! teardown-counter 0)
+          (info "Docker cluster stopped successfully")))))
 
   db/Primary
   (primaries [_ test]

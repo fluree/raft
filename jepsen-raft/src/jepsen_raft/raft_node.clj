@@ -622,10 +622,15 @@
 
 (defn- forward-command-to-leader
   "Forward command to the leader node via HTTP."
-  [leader-id command port-map host-map content-type]
+  [leader-id command port-map host-map docker-mode? content-type]
   (if-let [leader-port (get port-map leader-id)]
     (try
-      (let [leader-host (get host-map leader-id "localhost")]
+      (let [leader-host (if docker-mode?
+                          ;; In Docker mode, use container hostname for inter-container communication
+                          leader-id
+                          ;; In non-Docker mode, use the host-map value
+                          (get host-map leader-id "localhost"))
+            connection-timeout (if docker-mode? 5000 http-connection-timeout-ms)]
         (log/info "Forwarding command" (:op command) "to leader" leader-id
                   "at" leader-host ":" leader-port)
         (let [url (str "http://" leader-host ":" leader-port "/command")
@@ -637,7 +642,7 @@
                                                 :headers {"Content-Type" "application/octet-stream"}
                                                 :as :byte-array
                                                 :socket-timeout http-socket-timeout-ms
-                                                :connection-timeout http-connection-timeout-ms
+                                                :connection-timeout connection-timeout
                                                 :throw-exceptions false})
                        ;; JSON format
                          (clj-http.client/post url
@@ -646,7 +651,7 @@
                                                 :accept :json
                                                 :as :json
                                                 :socket-timeout http-socket-timeout-ms
-                                                :connection-timeout http-connection-timeout-ms
+                                                :connection-timeout connection-timeout
                                                 :throw-exceptions false}))]
           (if (= 200 (:status response))
             (let [result (if (= content-type "application/octet-stream")
@@ -675,7 +680,7 @@
 
 (defn- handle-command-request
   "Handle /command endpoint."
-  [raft-instance request port-map host-map]
+  [raft-instance request port-map host-map docker-mode?]
   (let [content-type (get-in request [:headers "content-type"])
         command (prepare-command-from-request request)
         current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
@@ -686,7 +691,7 @@
 
       ;; We know who the leader is - forward to them
       (:leader current-state)
-      (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map content-type) content-type)
+      (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map docker-mode? content-type) content-type)
 
       ;; No leader elected yet
       :else
@@ -700,11 +705,11 @@
 
 (defn- create-http-handler
   "Create Ring handler for HTTP interface."
-  [raft-instance server-id state-atom port-map host-map]
+  [raft-instance server-id state-atom port-map host-map docker-mode?]
   (fn [request]
     (try
       (case (:uri request)
-        "/command" (handle-command-request raft-instance request port-map host-map)
+        "/command" (handle-command-request raft-instance request port-map host-map docker-mode?)
         "/debug"   (handle-debug-request raft-instance server-id state-atom)
         "/health"  (let [current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
                      (response/response {:status "ok"
@@ -839,7 +844,9 @@
 
         ;; HTTP server setup
         http-host-map (build-http-host-map tcp-host-map nodes)
-        http-handler (create-http-handler raft-instance node-id state-atom http-port-map http-host-map)
+        docker-mode? (and (seq tcp-host-map) 
+                          (some #(not= "localhost" %) (vals tcp-host-map)))
+        http-handler (create-http-handler raft-instance node-id state-atom http-port-map http-host-map docker-mode?)
         http-app (create-http-app http-handler)
         http-server (start-http-server http-app http-port :host http-host)]
 

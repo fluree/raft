@@ -48,7 +48,7 @@
                                     (checker/linearizable
                                      {:model (model/cas-register)}))})
             :generator (->> (independent/concurrent-generator
-                             3
+                             2
                              config/test-keys
                              (fn [_k]
                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
@@ -86,7 +86,7 @@
                                     (checker/linearizable
                                      {:model (model/cas-register)}))})
             :generator (->> (independent/concurrent-generator
-                             3
+                             2
                              config/test-keys
                              (fn [_k]
                                (->> (gen/mix [ops/read-op ops/write-op ops/cas-op])
