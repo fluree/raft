@@ -552,22 +552,33 @@
   "Build Raft command from HTTP request."
   [command]
   ;; Pass through the command as-is, it's already in the correct format
-  ;; Just validate that it has an :op field
-  (if (:op command)
+  ;; Just validate that it has an :f field (converted from :op)
+  (if (:f command)
     command
-    {:op :unknown :error "Missing operation field"}))
+    {:f :unknown :error "Missing operation field"}))
 
 (defn- submit-command-to-raft
   "Submit command to Raft and wait for result."
   [raft-instance command]
-  (let [result-promise (promise)]
+  (let [result-promise (promise)
+        submit-timestamp (System/currentTimeMillis)]
+    (log/info "RAFT_SUBMIT:" (:f command) "key=" (:key command) "value=" (:value command) 
+              "timestamp=" submit-timestamp)
     (raft/new-entry raft-instance command
                     (fn [result]
-                      (log/debug "Raft callback received result:" result)
-                      (deliver result-promise result))
+                      (let [callback-timestamp (System/currentTimeMillis)]
+                        (log/info "RAFT_CALLBACK:" (:f command) "key=" (:key command) 
+                                  "result=" (:type result) "value=" (:value result)
+                                  "submit-to-callback-ms=" (- callback-timestamp submit-timestamp)
+                                  "timestamp=" callback-timestamp)
+                        (deliver result-promise result)))
                     rpc-timeout-ms)
-    (let [final-result (deref result-promise 6000 {:type :info :error :timeout})]
-      (log/debug "Submit command returning result:" final-result)
+    (let [final-result (deref result-promise 6000 {:type :info :error :timeout})
+          final-timestamp (System/currentTimeMillis)]
+      (log/info "RAFT_RESULT:" (:f command) "key=" (:key command) 
+                "final-type=" (:type final-result) "final-value=" (:value final-result)
+                "total-duration-ms=" (- final-timestamp submit-timestamp)
+                "timestamp=" final-timestamp)
       final-result)))
 
 (defn- handle-command
@@ -604,10 +615,13 @@
 (defn- prepare-command-from-request
   "Prepare command from HTTP request body."
   [request]
-  (let [body (parse-request-body request)]
+  (let [body (parse-request-body request)
+        op-keyword (keyword (:op body))]
     (-> body
-        (update :op keyword)
-        (update :key keyword))))
+        (update :key keyword)
+        ;; Convert :op to :f for Raft state machine compatibility
+        (assoc :f op-keyword)
+        (dissoc :op))))
 
 (defn- build-debug-response
   "Build debug response with node and Raft state."
@@ -631,7 +645,7 @@
                           ;; In non-Docker mode, use the host-map value
                           (get host-map leader-id "localhost"))
             connection-timeout (if docker-mode? 5000 http-connection-timeout-ms)]
-        (log/info "Forwarding command" (:op command) "to leader" leader-id
+        (log/info "Forwarding command" (:f command) "to leader" leader-id
                   "at" leader-host ":" leader-port)
         (let [url (str "http://" leader-host ":" leader-port "/command")
             ;; Forward with same content-type as original request
@@ -683,19 +697,33 @@
   [raft-instance request port-map host-map docker-mode?]
   (let [content-type (get-in request [:headers "content-type"])
         command (prepare-command-from-request request)
-        current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
+        current-state (get-current-raft-state raft-instance raft-state-timeout-ms)
+        node-id (get current-state :server-id "unknown")]
+    (log/info "COMMAND_REQUEST:" node-id "op=" (:f command) "key=" (:key command) 
+              "status=" (:status current-state) "term=" (:term current-state) 
+              "commit=" (:commit current-state) "index=" (:index current-state)
+              "timestamp=" (System/currentTimeMillis))
     (cond
       ;; We are the leader - process command
       (= :leader (:status current-state))
-      (serialize-response (handle-command raft-instance command) content-type)
+      (do
+        (log/info "LEADER_PROCESSING:" node-id "handling" (:f command) "for key" (:key command)
+                  "at commit-index" (:commit current-state) "timestamp=" (System/currentTimeMillis))
+        (serialize-response (handle-command raft-instance command) content-type))
 
       ;; We know who the leader is - forward to them
       (:leader current-state)
-      (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map docker-mode? content-type) content-type)
+      (do
+        (log/info "FORWARDING_TO_LEADER:" node-id "forwarding" (:f command) "for key" (:key command) 
+                  "to leader" (:leader current-state) "timestamp=" (System/currentTimeMillis))
+        (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map docker-mode? content-type) content-type))
 
       ;; No leader elected yet
       :else
-      (serialize-response {:type :fail :error "No leader elected"} content-type))))
+      (do
+        (log/info "NO_LEADER:" node-id "rejecting" (:f command) "for key" (:key command) 
+                  "no leader elected" "timestamp=" (System/currentTimeMillis))
+        (serialize-response {:type :fail :error "No leader elected"} content-type)))))
 
 (defn- handle-debug-request
   "Handle /debug endpoint."
@@ -728,21 +756,33 @@
   "Create state machine that converts :f to :op for compatibility."
   [base-state-machine]
   (fn [entry raft-state]
-    (cond
-      ;; Handle nil or empty entries
-      (or (nil? entry) (empty? entry))
-      (util/ok-result)
+    (let [apply-timestamp (System/currentTimeMillis)
+          node-id (get raft-state :server-id "unknown")
+          commit-index (get raft-state :commit-index "unknown")
+          applied-index (get raft-state :applied-index "unknown")]
+      (cond
+        ;; Handle nil or empty entries
+        (or (nil? entry) (empty? entry))
+        (do
+          (log/info "STATE_APPLY:" node-id "empty entry at applied-index" applied-index 
+                    "commit-index" commit-index "timestamp=" apply-timestamp)
+          (util/ok-result))
 
-      ;; Normal application operations with :f field
-      (:f entry)
-      (-> entry
-          (assoc :op (:f entry))
-          (dissoc :f)
-          (base-state-machine raft-state))
+        ;; Normal application operations with :f field
+        (:f entry)
+        (let [converted-entry (-> entry (assoc :op (:f entry)) (dissoc :f))
+              result (base-state-machine converted-entry raft-state)]
+          (log/info "STATE_APPLY:" node-id "op=" (:op converted-entry) "key=" (:key converted-entry) 
+                    "value=" (:value converted-entry) "result-type=" (:type result) "result-value=" (:value result)
+                    "applied-index" applied-index "commit-index" commit-index "timestamp=" apply-timestamp)
+          result)
 
-      ;; Entry without :f field - likely internal Raft operation
-      :else
-      (base-state-machine entry raft-state))))
+        ;; Entry without :f field - likely internal Raft operation
+        :else
+        (let [result (base-state-machine entry raft-state)]
+          (log/info "STATE_APPLY:" node-id "raw entry (no :f field)" "applied-index" applied-index 
+                    "commit-index" commit-index "timestamp=" apply-timestamp)
+          result)))))
 
 (defn- create-snapshot-config
   "Create snapshot configuration."
