@@ -113,8 +113,12 @@
 
                     :timeout
                     (if (leader/is-leader? raft-state)
-                      (leader/queue-append-entries raft-state)
-                      (leader/request-votes raft-state))
+                      (do
+                        (log/trace "Leader heartbeat timeout, sending append entries")
+                        (leader/queue-append-entries raft-state))
+                      (do
+                        (log/debug "Election timeout, requesting votes for term:" (inc (:term raft-state)))
+                        (leader/request-votes raft-state)))
 
                     ;; TODO - Connect. For now, this is not used
                     :initialize-config

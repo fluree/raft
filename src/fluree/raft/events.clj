@@ -355,6 +355,7 @@
   as it is likely a follower was just slow receiving our append entries request
   and this can get things back on track quickly."
   [raft-state args callback]
+  (log/debug "Request vote event from" (:candidate-id args) "for term:" (:term args))
   (let [{:keys [candidate-id last-log-index last-log-term]} args
         proposed-term     (:term args)
         {:keys [index term log-file voted-for snapshot-index snapshot-term status]} raft-state
@@ -381,9 +382,7 @@
         newer-term?       (> proposed-term term)
 
         response          (if reject-vote?
-                            {:term         (max term proposed-term)
-                             :vote-granted false
-                             :reason       (cond (< proposed-term term)
+                            (let [reason (cond (< proposed-term term)
                                                  (format "Proposed term %s is less than current term %s." proposed-term term)
 
                                                  (and (= proposed-term term) ;; make sure we haven't already voted for someone in this term
@@ -397,9 +396,15 @@
                                                  (format "For index %s, provided log term of %s is less than our log term of %s." last-log-index last-log-term my-last-log-term)
 
                                                  have-newer-index?
-                                                 (format "For index %s the terms are the same: %s, but our index is longer: %s." last-log-index last-log-term index))}
+                                                 (format "For index %s the terms are the same: %s, but our index is longer: %s." last-log-index last-log-term index))]
+                              (log/debug "Rejecting vote for" candidate-id "reason:" reason)
+                              {:term         (max term proposed-term)
+                               :vote-granted false
+                               :reason       reason})
 
-                            {:term proposed-term :vote-granted true})
+                            (do
+                              (log/debug "Granting vote for" candidate-id "in term:" proposed-term)
+                              {:term proposed-term :vote-granted true}))
         raft-state*       (cond
                             ;; we gave our vote, register
                             (not reject-vote?)

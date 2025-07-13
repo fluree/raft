@@ -36,9 +36,9 @@
    :http-connection-ms   1000})
 
 (def ^:private connection-config
-  {:reconnect-delay-ms       500
-   :reconnect-retry-delay-ms 2000
-   :retry-base-ms            100
+  {:reconnect-delay-ms       5000
+   :reconnect-retry-delay-ms 10000
+   :retry-base-ms            1000
    :max-attempts             5
    :setup-delay-ms           1000
    :spacing-ms               100})
@@ -90,14 +90,19 @@
   "Clean up event loop when no more connections exist for a server."
   [server-id]
   (locking tcp-client-event-loops
-    (when (empty? (get-in @tcp-connections [server-id :conn-to]))
-      (when-let [event-loop (get @tcp-client-event-loops server-id)]
-        (log/debug server-id "Cleaning up event loop - no remaining connections")
-        (try
-          (.close event-loop)
-          (catch Exception e
-            (log/warn e server-id "Error closing event loop")))
-        (swap! tcp-client-event-loops dissoc server-id)))))
+    (let [connections (get-in @tcp-connections [server-id :conn-to])]
+      (when (or (nil? connections) (empty? connections))
+        (when-let [event-loop (get @tcp-client-event-loops server-id)]
+          (log/debug server-id "Cleaning up event loop - no remaining connections")
+          (try
+            (if (map? event-loop)
+              (do
+                (log/debug server-id "Shutting down event loop map")
+                (tcp/shutdown! event-loop))
+              (log/debug server-id "Event loop is not a map, skipping shutdown"))
+            (catch Exception e
+              (log/warn e server-id "Error shutting down event loop")))
+          (swap! tcp-client-event-loops dissoc server-id))))))
 
 (defn- get-write-channel-for-node
   "Get the write channel for sending messages to a specific node.
@@ -143,11 +148,9 @@
     (if (nil? write-chan)
       false
       (let [message (serialize-message header data)
-            timeout-chan (async/timeout 1000) ; 1 second timeout
-            success-chan (async/go (async/>! write-chan message))
-            [result _] (async/alts!! [success-chan timeout-chan])]
-        ;; Returns true if put succeeded, false if it failed or timed out
-        (boolean result)))
+            success (async/put! write-chan message)]
+        ;; async/put! returns true if successful, false if channel is closed
+        (boolean success)))
     (catch Exception e
       (log/debug "Failed to send message to channel:" (.getMessage e))
       false)))
@@ -165,32 +168,12 @@
           (if send-success
             true
             (do
-              (log/debug from-server "Failed to send RPC to" to-server "- triggering immediate reconnection")
+              (log/debug from-server "Failed to send RPC to" to-server "- cleaning up stale connection")
               (remove-connection! from-server to-server)
-              ;; Force immediate reconnection on send failure
-              (when-let [conn-params (get-in @tcp-connection-params [from-server to-server])]
-                (let [{:keys [host port raft-instance]} conn-params]
-                  (log/debug from-server "Attempting immediate reconnection to" to-server)
-                  (go
-                    (<! (async/timeout 100)) ; Short delay to avoid tight reconnection loop
-                    (when-not (get-connection from-server to-server)
-                      (connect-to-server from-server to-server host port raft-instance)))))
               false))))
       (do
         (log/debug from-server "No connection to" to-server "for RPC:" (:op header)
                   "- available tcp-connections:" (keys (get-in @tcp-connections [from-server :conn-to])))
-        ;; If we see the connection in our map but can't get write channel, clean it up
-        (when (get-in @tcp-connections [from-server :conn-to to-server])
-          (log/debug from-server "Removing stale connection to" to-server)
-          (remove-connection! from-server to-server)
-          ;; Try to establish new connection
-          (when-let [conn-params (get-in @tcp-connection-params [from-server to-server])]
-            (let [{:keys [host port raft-instance]} conn-params]
-              (log/debug from-server "Attempting forced reconnection to" to-server)
-              (go
-                (<! (async/timeout 200)) ; Brief delay
-                (when-not (get-connection from-server to-server)
-                  (connect-to-server from-server to-server host port raft-instance))))))
         false))))
 
 (defn- invoke-raft-rpc
@@ -294,9 +277,9 @@
     (when (and (= :outbound (:type conn))
                (get-in @tcp-connection-params [server-id remote-id]))
       (let [{:keys [host port raft-instance]} (get-in @tcp-connection-params [server-id remote-id])]
-        (log/debug server-id "Initiating immediate reconnection to" remote-id)
+        (log/info server-id "Scheduling reconnection to" remote-id "in" (/ (:reconnect-delay-ms connection-config) 1000) "s")
         (go
-          ;; Immediate reconnection attempt, no delay
+          (<! (async/timeout (:reconnect-delay-ms connection-config)))
           (when-not (get-connection server-id remote-id)
             (connect-to-server server-id remote-id host port raft-instance)))))))
 
@@ -906,7 +889,8 @@
   (raft/close raft-instance)
   ;; Cleanup event loops
   (doseq [[_ event-loop] @tcp-client-event-loops]
-    (tcp/shutdown! event-loop))
+    (when (and event-loop (map? event-loop))
+      (tcp/shutdown! event-loop)))
   ;; Reset state
   (reset! tcp-connections {})
   (reset! tcp-client-event-loops {})

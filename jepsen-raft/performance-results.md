@@ -109,7 +109,7 @@ All tests completed without:
 
 The Raft implementation demonstrates excellent stability and consistent performance across different cluster sizes.
 
-## Latest Jepsen Linearizability Tests (2025-07-11)
+## Latest Jepsen Linearizability Tests (2025-07-13)
 
 **Test Status**: ✅ **PASSED** - All consistency checks valid
 
@@ -124,7 +124,7 @@ The Raft implementation demonstrates excellent stability and consistent performa
 - **Timeline**: ✅ Valid
 - **Performance Graphs**: ✅ Valid
 - **Consistency Check**: ✅ Zero violations detected
-- **Final State**: Key :x = 98, Key :y = 67
+- **Final State**: Key :x = 68, Key :y = 20
 - **Test Artifacts**: `test-results/5-minute-consistency-test/`
 
 **Key Insights:**
@@ -134,6 +134,7 @@ The Raft implementation demonstrates excellent stability and consistent performa
 - End-of-test `:no-response` failures are expected (test teardown artifact)
 - Validates production-readiness for extended operation periods
 - 2-key configuration provides stable linearizability results
+- **Fix validation**: Successfully resolved reconnection loop issues from commit 3d86c3a
 
 ## Test Environment
 

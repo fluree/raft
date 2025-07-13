@@ -348,7 +348,7 @@
 (defn- become-leader
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
   [raft-state]
-  (log/debug (format "Becoming leader, leader: %s, term: %s, latest index: %s."
+  (log/info (format "Becoming leader, leader: %s, term: %s, latest index: %s."
                      (:this-server raft-state) (:term raft-state) (:index raft-state)))
   (let [{:keys [this-server index servers other-servers]} raft-state
         heartbeat-time (get-in raft-state [:config :heartbeat-ms])
@@ -394,7 +394,7 @@
         candidate?  (= :candidate status)]
     (cond
       ;; remote server is newer term, become follower
-      (> (:term response) term)
+      (and (:term response) (> (:term response) term))
       (let [cause {:cause      :request-vote-response
                    :old-leader (:leader raft-state)
                    :new-leader nil
@@ -425,7 +425,11 @@
                                ;; make sure votes in state are for this term
                                (filter #(and (= proposed-term (first %)) (true? (second %))))
                                (count))
-            majority?     (> votes-for (/ (count (:servers raft-state*)) 2))]
+            majority?     (> votes-for (/ (count (:servers raft-state*)) 2))
+            votes-from    (keys (filter (fn [[_ state]] 
+                                         (let [[t granted] (:vote state)]
+                                           (and (= t proposed-term) granted)))
+                                      (:servers raft-state*)))]
         (if majority?
           (become-leader raft-state*)
           raft-state*)))))

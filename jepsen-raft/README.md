@@ -298,7 +298,7 @@ clojure -M:performance single 200 100
 **Note**: The performance test automatically starts and stops nodes by default. Node logs are written to `/tmp/jepsen-raft-network/n*-perf.log` for debugging.
 
 ### Performance Characteristics
-Based on our latest testing (2025-07-11):
+Based on our latest testing (2025-07-13):
 - **Jepsen Linearizability Tests**: ✅ 100% success rate on 5-node cluster, all consistency checks passed with 2-key concurrent operations
 - **Performance Tests**: Up to 846.0 ops/sec peak (150 clients on 7-node cluster)
 - **Node Startup**: Reliable staggered startup with built-in health checks
@@ -307,7 +307,7 @@ Based on our latest testing (2025-07-11):
 
 ## 🎯 Latest Test Results
 
-**[📊 5-Minute Consistency Test Results](test-results/5-minute-consistency-test/results.edn)** - July 11, 2025
+**[📊 5-Minute Consistency Test Results](test-results/5-minute-consistency-test/results.edn)** - July 13, 2025
 
 **Key Files:**
 - [📈 Visual Timeline](test-results/5-minute-consistency-test/timeline.html) - Interactive operation timeline
