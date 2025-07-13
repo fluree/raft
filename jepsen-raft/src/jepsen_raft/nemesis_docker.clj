@@ -23,6 +23,8 @@
     "n1" (run-network-script "partition-n1")
     "n2" (run-network-script "partition-n2")
     "n3" (run-network-script "partition-n3")
+    "n4" (run-network-script "partition-n4")
+    "n5" (run-network-script "partition-n5")
     (warn "Unknown node for partitioning:" node)))
 
 (defn create-split-brain
@@ -50,16 +52,12 @@
   (run-network-script "remove-latency"))
 
 (defn random-partition
-  "Create a random network partition."
+  "Create a random network partition that maintains majority quorum."
   []
-  (let [partition-type (rand-nth [:single-node :split-brain])]
-    (case partition-type
-      :single-node (let [node (rand-nth ["n1" "n2" "n3"])]
-                     (info "Random single node partition:" node)
-                     (partition-node node))
-      :split-brain (do
-                     (info "Random split-brain partition")
-                     (create-split-brain)))))
+  ;; Only do single-node partitions to ensure 4-node majority can maintain quorum
+  (let [node (rand-nth ["n1" "n2" "n3" "n4" "n5"])]
+    (info "Random single node partition (maintaining majority):" node)
+    (partition-node node)))
 
 (defrecord DockerNetworkNemesis []
   nemesis/Nemesis

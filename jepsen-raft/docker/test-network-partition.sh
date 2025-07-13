@@ -11,9 +11,11 @@ usage() {
     echo "Usage: $0 <command> [options]"
     echo ""
     echo "Commands:"
-    echo "  partition-n1     - Isolate n1 from n2 and n3"
-    echo "  partition-n2     - Isolate n2 from n1 and n3"
-    echo "  partition-n3     - Isolate n3 from n1 and n2"
+    echo "  partition-n1     - Isolate n1 from other nodes"
+    echo "  partition-n2     - Isolate n2 from other nodes"
+    echo "  partition-n3     - Isolate n3 from other nodes"
+    echo "  partition-n4     - Isolate n4 from other nodes"
+    echo "  partition-n5     - Isolate n5 from other nodes"
     echo "  split-brain      - Create 2-1 partition (n1,n2 vs n3)"
     echo "  heal-all         - Remove all network partitions"
     echo "  add-latency      - Add 100ms latency between all nodes"
@@ -60,7 +62,7 @@ partition_node() {
 heal_partitions() {
     echo "Healing all network partitions..."
     
-    for node in n1 n2 n3; do
+    for node in n1 n2 n3 n4 n5; do
         docker exec "raft-$node" iptables -F 2>/dev/null || true
         echo "  Cleared iptables rules for $node"
     done
@@ -73,7 +75,7 @@ add_network_latency() {
     local latency=${1:-100}
     echo "Adding ${latency}ms latency to all nodes..."
     
-    for node in n1 n2 n3; do
+    for node in n1 n2 n3 n4 n5; do
         # Add latency to outgoing traffic
         docker exec "raft-$node" tc qdisc add dev eth0 root netem delay "${latency}ms" 2>/dev/null || \
         docker exec "raft-$node" tc qdisc change dev eth0 root netem delay "${latency}ms" 2>/dev/null || true
@@ -84,7 +86,7 @@ add_network_latency() {
 remove_network_latency() {
     echo "Removing network latency..."
     
-    for node in n1 n2 n3; do
+    for node in n1 n2 n3 n4 n5; do
         docker exec "raft-$node" tc qdisc del dev eth0 root 2>/dev/null || true
         echo "  Removed latency from $node"
     done
@@ -158,15 +160,23 @@ DURATION=${2:-30}
 
 case $COMMAND in
     "partition-n1")
-        partition_node n1 n2 n3
+        partition_node n1 n2 n3 n4 n5
         wait_for_cluster
         ;;
     "partition-n2")
-        partition_node n2 n1 n3
+        partition_node n2 n1 n3 n4 n5
         wait_for_cluster
         ;;
     "partition-n3")
-        partition_node n3 n1 n2
+        partition_node n3 n1 n2 n4 n5
+        wait_for_cluster
+        ;;
+    "partition-n4")
+        partition_node n4 n1 n2 n3 n5
+        wait_for_cluster
+        ;;
+    "partition-n5")
+        partition_node n5 n1 n2 n3 n4
         wait_for_cluster
         ;;
     "split-brain")

@@ -1,6 +1,6 @@
 (ns jepsen-raft.util
   "Shared utilities for Jepsen Raft tests"
-  (:require [clojure.tools.logging :refer [info]]
+  (:require [clojure.tools.logging :as log :refer [info]]
             [clojure.java.shell]
             [clojure.string]
             [jepsen-raft.config :as config]
@@ -10,9 +10,9 @@
 ;; Configuration Constants
 ;; =============================================================================
 
-;; Default timeouts used by default-raft-config
+;; Default timeouts used by default-raft-config - balanced for Docker network recovery
 (def ^:private default-heartbeat-ms 100)
-(def ^:private default-election-timeout-ms 300)
+(def ^:private default-election-timeout-ms 1000)
 (def ^:private default-snapshot-threshold 100)
 
 ;; =============================================================================
