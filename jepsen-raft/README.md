@@ -300,7 +300,7 @@ clojure -M:performance single 200 100
 ### Performance Characteristics
 Based on our latest testing (2025-07-13):
 - **Jepsen Linearizability Tests**: ✅ 100% success rate on 5-node cluster, all consistency checks passed with 2-key concurrent operations
-- **Performance Tests**: Up to 846.0 ops/sec peak (150 clients on 7-node cluster)
+- **Performance Tests**: Up to 757.3 ops/sec peak (200 clients on 3-node cluster)
 - **Node Startup**: Reliable staggered startup with built-in health checks
 - **Cluster Configuration**: Test harness supports 3, 5, or 7 nodes with ports 7001-7005 (HTTP), 9001-9005 (TCP)
 - **Breaking point**: None detected up to 200 clients - maintains reliability

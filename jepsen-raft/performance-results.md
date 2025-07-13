@@ -9,95 +9,96 @@
 ## Results Summary
 
 ### 3-Node Cluster Performance
-- **Peak Throughput**: 565.2 ops/sec at 150 clients
+- **Peak Throughput**: 757.3 ops/sec at 200 clients
 - **Cluster maintained 100% success rate** throughout all load levels
-- **Maximum tested**: 200 clients with 474.1 ops/sec
+- **Maximum tested**: 200 clients with 757.3 ops/sec
 
 | Clients | Throughput (ops/sec) | Success Rate |
 |---------|---------------------|--------------|
-| 1       | 83.3                | 100.0%       |
-| 2       | 160.0               | 100.0%       |
-| 5       | 312.5               | 100.0%       |
-| 10      | 330.0               | 100.0%       |
-| 15      | 390.3               | 100.0%       |
-| 20      | 449.4               | 100.0%       |
-| 30      | 454.5               | 100.0%       |
-| 40      | 444.4               | 100.0%       |
-| 50      | 540.5               | 100.0%       |
-| 75      | 543.5               | 100.0%       |
-| 100     | 500.0               | 100.0%       |
-| 150     | **565.2**           | 100.0%       |
-| 200     | 474.1               | 100.0%       |
+| 1       | 16.1                | 100.0%       |
+| 2       | 30.8                | 100.0%       |
+| 5       | 117.6               | 100.0%       |
+| 10      | 131.1               | 100.0%       |
+| 15      | 145.1               | 100.0%       |
+| 20      | 198.2               | 100.0%       |
+| 30      | 203.0               | 100.0%       |
+| 40      | 329.2               | 100.0%       |
+| 50      | 365.8               | 100.0%       |
+| 75      | 497.7               | 100.0%       |
+| 100     | 631.7               | 100.0%       |
+| 150     | 747.8               | 100.0%       |
+| 200     | **757.3**           | 100.0%       |
 
 ### 5-Node Cluster Performance  
-- **Peak Throughput**: 638.0 ops/sec at 150 clients
+- **Peak Throughput**: 574.5 ops/sec at 200 clients
 - **Cluster maintained 100% success rate** throughout all load levels
-- **Maximum tested**: 200 clients with 531.9 ops/sec
+- **Maximum tested**: 200 clients with 574.5 ops/sec
 
 | Clients | Throughput (ops/sec) | Success Rate |
 |---------|---------------------|--------------|
-| 1       | 83.3                | 100.0%       |
-| 2       | 160.0               | 100.0%       |
-| 5       | 312.5               | 100.0%       |
-| 10      | 330.0               | 100.0%       |
-| 15      | 365.9               | 100.0%       |
-| 20      | 392.2               | 100.0%       |
-| 30      | 454.5               | 100.0%       |
-| 40      | 533.3               | 100.0%       |
-| 50      | 510.2               | 100.0%       |
-| 75      | 596.0               | 100.0%       |
-| 100     | 625.0               | 100.0%       |
-| 150     | **638.0**           | 100.0%       |
-| 200     | 531.9               | 100.0%       |
+| 1       | 14.5                | 100.0%       |
+| 2       | 26.2                | 100.0%       |
+| 5       | 117.9               | 100.0%       |
+| 10      | 76.2                | 100.0%       |
+| 15      | 110.7               | 100.0%       |
+| 20      | 141.9               | 100.0%       |
+| 30      | 222.6               | 100.0%       |
+| 40      | 289.0               | 100.0%       |
+| 50      | 283.3               | 100.0%       |
+| 75      | 349.5               | 100.0%       |
+| 100     | 394.2               | 100.0%       |
+| 150     | 542.1               | 100.0%       |
+| 200     | **574.5**           | 100.0%       |
 
 ### 7-Node Cluster Performance
-- **Peak Throughput**: 846.0 ops/sec at 150 clients  
+- **Peak Throughput**: 420.1 ops/sec at 200 clients  
 - **Cluster maintained 100% success rate** throughout all load levels
-- **Maximum tested**: 200 clients with 791.8 ops/sec
+- **Maximum tested**: 200 clients with 420.1 ops/sec
 
 | Clients | Throughput (ops/sec) | Success Rate |
 |---------|---------------------|--------------|
-| 1       | 82.0                | 100.0%       |
-| 2       | 160.0               | 100.0%       |
-| 5       | 312.5               | 100.0%       |
-| 10      | 330.0               | 100.0%       |
-| 15      | 342.5               | 100.0%       |
-| 20      | 284.5               | 100.0%       |
-| 30      | 454.5               | 100.0%       |
-| 40      | 596.1               | 100.0%       |
-| 50      | 590.3               | 100.0%       |
-| 75      | 610.3               | 100.0%       |
-| 100     | 699.8               | 100.0%       |
-| 150     | **846.0**           | 100.0%       |
-| 200     | 791.8               | 100.0%       |
+| 1       | 14.1                | 100.0%       |
+| 2       | 28.4                | 100.0%       |
+| 5       | 41.1                | 100.0%       |
+| 10      | 82.9                | 100.0%       |
+| 15      | 115.5               | 100.0%       |
+| 20      | 113.7               | 100.0%       |
+| 30      | 147.1               | 100.0%       |
+| 40      | 186.3               | 100.0%       |
+| 50      | 229.1               | 100.0%       |
+| 75      | 258.7               | 100.0%       |
+| 100     | 313.3               | 100.0%       |
+| 150     | 400.5               | 100.0%       |
+| 200     | **420.1**           | 100.0%       |
 
 ## Performance Analysis
 
 ### Key Findings
 
 1. **Cluster Size Impact**: 
-   - 7-node cluster shows **33% higher peak throughput** (846.0 ops/sec) compared to 5-node (638.0 ops/sec)
-   - 5-node cluster shows **13% higher peak throughput** compared to 3-node (565.2 ops/sec)
+   - **3-node cluster** achieved **highest peak throughput** (757.3 ops/sec) at 200 clients
+   - **5-node cluster** shows **24% lower throughput** (574.5 ops/sec) compared to 3-node 
+   - **7-node cluster** shows **45% lower throughput** (420.1 ops/sec) compared to 3-node
 
 2. **Reliability**: 
    - All cluster configurations maintained **100% success rate** under all tested load levels
    - No breaking point detected within 200 concurrent clients
 
 3. **Optimal Load Points**:
-   - **3-node**: 150 clients for peak performance
-   - **5-node**: 150 clients for peak performance  
-   - **7-node**: 150 clients for peak performance
+   - **3-node**: 200 clients for peak performance (757.3 ops/sec)
+   - **5-node**: 200 clients for peak performance (574.5 ops/sec)
+   - **7-node**: 200 clients for peak performance (420.1 ops/sec)
 
 4. **Scalability**: 
-   - Adding nodes provides significant throughput improvements
-   - Linear improvement not observed (diminishing returns pattern)
-   - 7-node cluster handles 200 clients with excellent performance (791.8 ops/sec)
+   - **Reverse scaling observed**: Fewer nodes provide higher throughput 
+   - Consensus overhead increases with more nodes, reducing overall performance
+   - 3-node cluster optimal for maximum throughput with maintained fault tolerance
 
 ### Performance Characteristics
 
-- **Low Load (1-10 clients)**: All configurations perform similarly
-- **Medium Load (15-50 clients)**: 5 and 7-node clusters begin to show advantages
-- **High Load (75-200 clients)**: 7-node cluster demonstrates clear superiority
+- **Low Load (1-10 clients)**: All configurations perform similarly with modest throughput
+- **Medium Load (15-50 clients)**: 3-node cluster begins to show clear advantages
+- **High Load (75-200 clients)**: 3-node cluster demonstrates superior performance throughout
 
 ### Cluster Stability
 
