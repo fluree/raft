@@ -15,20 +15,23 @@
            (log/error e "Callback failed. Called with data: " (pr-str data))
            nil))))
 
+
 (defn into-chan
   "Conjoins all available entries in channel to supplied collection."
   [coll c]
   (async/<!!
-   (async/go-loop [acc coll]
-     (let [[next _] (async/alts! [c] :default ::drained)]
-       (if (= ::drained next)
-         acc
-         (recur (conj acc next)))))))
+    (async/go-loop [acc coll]
+      (let [[next _] (async/alts! [c] :default ::drained)]
+        (if (= ::drained next)
+          acc
+          (recur (conj acc next)))))))
+
 
 (defn event-chan
   "Returns event channel for the raft instance."
   [raft]
   (get-in raft [:config :event-chan]))
+
 
 (defn new-election-timeout
   "Generates a new election timeout in milliseconds."
@@ -44,15 +47,17 @@
                                                      :received     0
                                                      :avg-response 0}})
 
+
 (defn reset-server-state
   "Called when we become a follower to clear out any pending outgoing messages."
   [raft-state]
   (let [servers (get-in raft-state [:config :servers])]
     (reduce
-     (fn [raft-state* server-id]
-       (update-in raft-state* [:servers server-id]
-                  #(assoc server-state-baseline :stats (:stats %))))
-     raft-state servers)))
+      (fn [raft-state* server-id]
+        (update-in raft-state* [:servers server-id]
+                   #(assoc server-state-baseline :stats (:stats %))))
+      raft-state servers)))
+
 
 (defn send-queued-messages
   "Sends all queued messages if we aren't waiting for responses."
@@ -61,13 +66,14 @@
     (let [send-rpc-fn (get-in raft-state [:config :send-rpc-fn])
           raft-state* (dissoc raft-state :msg-queue)]
       (reduce-kv
-       (fn [raft-state* server-id message]
-         (apply send-rpc-fn raft-state* server-id message)
-         (if-let [msgs (get-in raft-state* [:servers server-id :stats :sent])]
-           (assoc-in raft-state* [:servers server-id :stats :sent] (inc msgs))
-           raft-state*))
-       raft-state* msg-queue))
+        (fn [raft-state* server-id message]
+          (apply send-rpc-fn raft-state* server-id message)
+          (if-let [msgs (get-in raft-state* [:servers server-id :stats :sent])]
+            (assoc-in raft-state* [:servers server-id :stats :sent] (inc msgs))
+            raft-state*))
+        raft-state* msg-queue))
     raft-state))
+
 
 (defn call-monitor-fn
   "Internal - calls monitor function safely and calcs time."
@@ -79,6 +85,7 @@
                                :before  (dissoc state-before :config)
                                :after   (dissoc state-after :config)}))
   state-after)
+
 
 (defn become-follower
   "Transition from a leader to a follower"
@@ -100,9 +107,10 @@
                                :timeout-at (+ new-timeout (System/currentTimeMillis)))
                         (reset-server-state))]
     (watch/call-leader-watch (assoc cause :event :become-follower
-                                    :new-raft-state raft-state*
-                                    :old-raft-state raft-state))
+                                          :new-raft-state raft-state*
+                                          :old-raft-state raft-state))
     raft-state*))
+
 
 (defn register-callback-event
   "Registers a single-arg callback to be executed once a command with specified id is committed to state
@@ -127,6 +135,7 @@
     ;; register command id to raft-state for use when processing new commits to state machine
     (assoc-in raft-state [:command-callbacks command-id] resp-chan)))
 
+
 ;; TODO - this is not actually used, need to enforce
 (defn initialize-config
   "When a new leader is elected, we make sure everyone has the same config"
@@ -138,6 +147,7 @@
         (assoc-in [:config :servers] servers)
         (assoc-in [:other-servers] other-servers)
         (assoc :servers servers-map))))
+
 
 (defn config-change
   [raft-state data callback]
@@ -152,9 +162,11 @@
                                                   :op op
                                                   :command-id command-id})))))
 
+
 (defn conj-distinct
   [val add]
   (-> (conj val add) set vec))
+
 
 (defn apply-config-change
   ([raft-state req]
@@ -188,6 +200,7 @@
                          (assoc-in [:other-servers] other-servers*)
                          (assoc-in [:servers] servers))))))))
 
+
 (defn update-commits
   "Process new commits if leader-commit is updated.
   Put commit results on callback async channel if present.
@@ -216,24 +229,25 @@
                              term-at-commit commit snapshot-index snapshot-threshold))
           (snapshot-write commit snapshot-callback)))
       (assoc raft-state :commit (min index leader-commit)   ;; never have a commit farther than our latest index
-             :snapshot-pending snapshot-pending
-             :command-callbacks (reduce
-                                 (fn [callbacks entry-map]
-                                   (let [resp (try
-                                                (state-machine (:entry entry-map) raft-state)
-                                                (catch Exception e
-                                                  (log/error e (format "State machine error processing entry: %s. Expected vector format [command params...] but received: %s"
-                                                                       (:entry entry-map)
-                                                                       (type (:entry entry-map))))
-                                                  {:error (str "State machine error: " (.getMessage e))}))]
-                                     (if-let [callback-chan (get callbacks (:id entry-map))]
-                                       (do
-                                         (if (nil? resp)
-                                           (async/close! callback-chan)
-                                           (async/put! callback-chan resp))
-                                         (dissoc callbacks (:id entry-map)))
-                                       callbacks)))
-                                 command-callbacks commit-entries)))))
+                        :snapshot-pending snapshot-pending
+                        :command-callbacks (reduce
+                                             (fn [callbacks entry-map]
+                                               (let [resp (try
+                                                           (state-machine (:entry entry-map) raft-state)
+                                                           (catch Exception e
+                                                             (log/error e (format "State machine error processing entry: %s. Expected vector format [command params...] but received: %s"
+                                                                                  (:entry entry-map)
+                                                                                  (type (:entry entry-map))))
+                                                             {:error (str "State machine error: " (.getMessage e))}))]
+                                                 (if-let [callback-chan (get callbacks (:id entry-map))]
+                                                   (do
+                                                     (if (nil? resp)
+                                                       (async/close! callback-chan)
+                                                       (async/put! callback-chan resp))
+                                                     (dissoc callbacks (:id entry-map)))
+                                                   callbacks)))
+                                             command-callbacks commit-entries)))))
+
 
 (defn append-entries-event
   [raft-state args callback]
@@ -264,56 +278,57 @@
           raft-state*            (cond-> raft-state
 
                                          ;; leader's term is newer, update leader info
-                                   new-leader?
-                                   (#(let [cause {:cause      :append-entries
-                                                  :old-leader leader
-                                                  :new-leader leader-id
-                                                  :message    (if (> proposed-term term)
-                                                                (str "Append entries term " proposed-term
-                                                                     " is newer than current term " term ".")
-                                                                (str "Append entries leader " leader-id
-                                                                     " for current term, " term ", is different than "
-                                                                     "current leader: " leader "."))
-                                                  :server     (:this-server raft-state)}]
-                                       (when (> index prev-log-index)
+                                         new-leader?
+                                         (#(let [cause {:cause      :append-entries
+                                                        :old-leader leader
+                                                        :new-leader leader-id
+                                                        :message    (if (> proposed-term term)
+                                                                      (str "Append entries term " proposed-term
+                                                                           " is newer than current term " term ".")
+                                                                      (str "Append entries leader " leader-id
+                                                                           " for current term, " term ", is different than "
+                                                                           "current leader: " leader "."))
+                                                        :server     (:this-server raft-state)}]
+                                             (when (> index prev-log-index)
                                                ;; it is possible we have log entries after the leader's latest, remove them
-                                         (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
-                                       (-> %
-                                           (assoc :latest-index proposed-new-index) ;; always reset latest-index with new leader
-                                           (become-follower proposed-term leader-id cause))))
+                                               (raft-log/remove-entries (:log-file %) (inc prev-log-index)))
+                                             (-> %
+                                                 (assoc :latest-index proposed-new-index) ;; always reset latest-index with new leader
+                                                 (become-follower proposed-term leader-id cause))))
 
                                          ;; we have a log match at prev-log-index
-                                   (and logs-match? (not-empty entries))
-                                   (#(do
-                                       (if (or (= index prev-log-index) new-leader?)
+                                         (and logs-match? (not-empty entries))
+                                         (#(do
+                                             (if (or (= index prev-log-index) new-leader?)
 
                                                ;; new entries, so add. If new leader, possibly over-write existing entries
-                                         (raft-log/append (:log-file %) entries prev-log-index index)
+                                               (raft-log/append (:log-file %) entries prev-log-index index)
 
                                                ;; Possibly new entries and no leader change.
                                                ;; At least some of these entries duplicate ones already received.
                                                ;; Happens when round-trip response doesn't complete prior to new updates being sent
-                                         (let [new-entries-n (- proposed-new-index index)
-                                               new-entries   (take-last new-entries-n entries)]
-                                           (when new-entries
-                                             (raft-log/append (:log-file %) new-entries index index))))
+                                               (let [new-entries-n (- proposed-new-index index)
+                                                     new-entries   (take-last new-entries-n entries)]
+                                                 (when new-entries
+                                                   (raft-log/append (:log-file %) new-entries index index))))
 
                                              ;; as an optimization, we will cache last entry as it will likely be requested next
-                                       (raft-log/assoc-index->term-cache proposed-new-index (:term (last entries)))
+                                             (raft-log/assoc-index->term-cache proposed-new-index (:term (last entries)))
 
-                                       (assoc % :index proposed-new-index
-                                              :latest-index (max proposed-new-index latest-index))))
+                                             (assoc % :index proposed-new-index
+                                                      :latest-index (max proposed-new-index latest-index))))
 
-;; we have an entry at prev-log-index, but doesn't match term, remove offending entries
-                                   (and (not logs-match?) term-at-prev-log-index)
-                                   (#(do
-                                       (raft-log/remove-entries (:log-file %) prev-log-index)
-                                       (assoc % :index (dec prev-log-index)
-                                              :latest-index (max proposed-new-index latest-index))))
+
+                                         ;; we have an entry at prev-log-index, but doesn't match term, remove offending entries
+                                         (and (not logs-match?) term-at-prev-log-index)
+                                         (#(do
+                                             (raft-log/remove-entries (:log-file %) prev-log-index)
+                                             (assoc % :index (dec prev-log-index)
+                                                      :latest-index (max proposed-new-index latest-index))))
 
                                          ;; Check if commit is newer and process into state machine if needed
-                                   logs-match?
-                                   (update-commits leader-commit))
+                                         logs-match?
+                                         (update-commits leader-commit))
           response               (cond
                                    logs-match?
                                    {:term proposed-term :success true}
@@ -325,8 +340,9 @@
         (log/debug "Append entries event: " {:new-leader? new-leader? :logs-match? logs-match? :args args :raft-state raft-state*}))
       (callback response)
       (assoc raft-state* :timeout (async/timeout new-timeout-ms)
-             :timeout-ms new-timeout-ms
-             :timeout-at (+ new-timeout-ms (System/currentTimeMillis))))))
+                         :timeout-ms new-timeout-ms
+                         :timeout-at (+ new-timeout-ms (System/currentTimeMillis))))))
+
 
 (defn request-vote-event
   "Grant vote to server requesting leadership if:
@@ -391,29 +407,29 @@
                               (raft-log/write-current-term (:log-file raft-state) proposed-term)
                               (raft-log/write-voted-for (:log-file raft-state) proposed-term candidate-id)
                               (assoc raft-state :term proposed-term
-                                     :voted-for candidate-id
-                                     :status :follower
-                                     :latest-index (max (:latest-index raft-state) last-log-index)
+                                                :voted-for candidate-id
+                                                :status :follower
+                                                :latest-index (max (:latest-index raft-state) last-log-index)
                                                 ;; reset timeout if we voted so as to not possibly immediately start a new election
-                                     :timeout (async/timeout new-timeout)
-                                     :timeout-ms new-timeout
-                                     :timeout-at (+ new-timeout (System/currentTimeMillis))))
+                                                :timeout (async/timeout new-timeout)
+                                                :timeout-ms new-timeout
+                                                :timeout-at (+ new-timeout (System/currentTimeMillis))))
 
                             ;; rejected, but was for newer term and we were the last leader
                             ;; likely triggered by slow/temporarily disconnected consumer
                             ;; initiate a new vote immediately to try and regain leadership
                             (and newer-term? (= :leader status))
                             (assoc raft-state :trigger-request-vote true
-                                   :status :candidate
-                                   :term proposed-term)
+                                              :status :candidate
+                                              :term proposed-term)
 
                             ;; rejected but request was for newer term than current
                             ;; we can still cast a vote for another server at this newer term
                             ;; if we were a candidate for the older term, give up
                             newer-term?
                             (assoc raft-state :term proposed-term
-                                   :voted-for nil
-                                   :status :follower)
+                                              :voted-for nil
+                                              :status :follower)
 
                             ;; rejected, but was for an older or same term. Nothing to do.
                             :else
@@ -421,6 +437,7 @@
     (log/debug "Request vote event, responding: " {:response response :args args :raft-state raft-state*})
     (callback response)
     raft-state*))
+
 
 (defn install-snapshot
   "Installs a new snapshot, does so in parts.
@@ -445,9 +462,9 @@
         done?         (= snapshot-part snapshot-parts)
         raft-state*   (if (and done? (not old-snapshot?))
                         (assoc raft-state :index snapshot-index
-                               :commit snapshot-index
-                               :snapshot-index snapshot-index
-                               :snapshot-term snapshot-term)
+                                          :commit snapshot-index
+                                          :snapshot-index snapshot-index
+                                          :snapshot-term snapshot-term)
                         raft-state)
         response      (if (or old-term? done? old-snapshot?)
                         {:term term :next-part nil}

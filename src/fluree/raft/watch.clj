@@ -3,6 +3,7 @@
 
 ;; add watch functions for specific raft changes
 
+
 (defn- watch-fn-atom
   "Watch fn atom has data structure like:
   {user-key1 {:fn         function
@@ -13,6 +14,7 @@
    where event-type is 'nil' for all events, or keyword for specific event."
   [raft]
   (:watch-fns raft))
+
 
 (defn add-leader-watch
   "Registers a function to be called with each leader change. Specify any key
@@ -40,11 +42,13 @@
    (swap! (watch-fn-atom raft) assoc key {:event-type event-type
                                           :fn         fn})))
 
+
 (defn remove-leader-watch
   "Removes watch function with specified key."
   [raft key]
   (assert (not (nil? key)))
   (swap! (watch-fn-atom raft) dissoc key))
+
 
 (defn call-leader-watch
   "Used internally to call registered leader watch functions."

@@ -7,6 +7,7 @@
   (:import (java.io File RandomAccessFile)
            (java.nio ByteBuffer)))
 
+
 (defn corrupt-long
   "Corrupts a long integer returning corrupted byte array with 7 bytes instead of 8"
   [long-int]
@@ -112,6 +113,7 @@
       (.seek (.length raf))
       (.write corrupt-len)
       (.close))))
+
 
 (deftest corrupt-logs
   (with-tmp-dir temp-dir

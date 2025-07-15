@@ -26,7 +26,7 @@
       (throw (ex-info (str "HTTP port " http " for node " node " is already in use. "
                            "Please kill any lingering processes: pkill -f jepsen-raft.raft-node")
                       {:node node :port http :type :http}))))
-
+  
   ;; Stagger node startup to avoid race conditions
   (let [node-index (.indexOf test-nodes node)
         node-index (if (neg? node-index) 0 node-index)  ; Default to 0 if not found

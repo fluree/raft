@@ -45,10 +45,11 @@
 
 (use-fixtures :once test-fixture)
 
+
 (deftest get-leader-test
   (testing "get-leader"
     (let [results (map kve/get-leader (range 1 (inc instances)))]
-      (is (apply = results)))))
+     (is (apply = results)))))
 
 (deftest write-read-test
   (testing "write-read-local value"
@@ -83,6 +84,7 @@
   (testing "delete unknown value")
   (let [k "unknown-key"]
     (is (false? (kve/delete k)))))
+
 
 ;(deftest write-read-rpc-test
 ;  (testing "write-read value"

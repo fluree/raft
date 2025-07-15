@@ -21,16 +21,19 @@
   [raft]
   (:log-file raft))
 
+
 (defn invoke-rpc*
   "Like invoke-rpc, but takes just the event channel instead of
   the full raft instance."
   [event-channel operation data callback]
   (async/put! event-channel [operation data callback]))
 
+
 (defn invoke-rpc
   "Call this with original raft config to invoke an incoming RPC command."
   [raft operation data callback]
   (invoke-rpc* (events/event-chan raft) operation data callback))
+
 
 (defn get-raft-state
   "Polls raft loop and returns state to provided callback."
@@ -38,12 +41,14 @@
   (let [event-chan (event-chan raft)]
     (async/put! event-chan [:raft-state nil callback])))
 
+
 (defn raft-state-async
   "Polls raft loop and puts state on returned channel."
   [raft]
   (let [ch (async/promise-chan)]
     (get-raft-state raft #(async/put! ch %))
     ch))
+
 
 (defn close
   "Closes a raft process."
@@ -54,6 +59,7 @@
     (if (fn? close-fn)
       (close-fn)
       :closed)))
+
 
 (defn event-loop
   "Launches an event loop where all state changes to the raft state happen.
@@ -79,8 +85,8 @@
         command-chan    (get-in raft-state [:config :command-chan])
         init-timeout    (events/new-election-timeout raft-state)
         init-raft-state (assoc raft-state :timeout (async/timeout init-timeout)
-                               :timeout-ms init-timeout
-                               :timeout-at (+ init-timeout (System/currentTimeMillis)))]
+                                          :timeout-ms init-timeout
+                                          :timeout-at (+ init-timeout (System/currentTimeMillis)))]
     (async/go-loop [raft-state init-raft-state
                     last-stop (System/nanoTime)]            ;; start time of last operation
       (let [timeout-chan (:timeout raft-state)
@@ -99,7 +105,7 @@
                            (:timeout-ms raft-state)
                            data))
         (if
-         (and (nil? event) (not timeout?))
+          (and (nil? event) (not timeout?))
           :raft-closed
           (let [raft-state*
                 (try
@@ -237,7 +243,8 @@
                                          (pr-str data) ". Ignoring call.")
                               raft-state))
 
-;; close down all pending callbacks
+
+                    ;; close down all pending callbacks
                     :close
                     (let [callback-chans (vals (:command-callbacks raft-state))]
                       (doseq [c callback-chans]
@@ -260,11 +267,13 @@
                   (events/send-queued-messages)
                   (recur (System/nanoTime))))))))))
 
+
 (defn register-callback
   "Registers a callback for a command with specified id."
   [raft command-id timeout-ms callback]
   (let [event-chan (event-chan raft)]
     (async/put! event-chan [:register-callback [command-id timeout-ms] callback])))
+
 
 (defn new-command
   "Issues a new RaftCommand (leader only) to create a new log entry."
@@ -273,6 +282,7 @@
    (assert (instance? RaftCommand command))
    (let [command-chan (get-in raft [:config :command-chan])]
      (async/put! command-chan [:new-command command persist-callback]))))
+
 
 (defn new-entry
   "Creates a new log entry (leader only). Generates a RaftCommand and submits it for processing."
@@ -288,6 +298,7 @@
                                     :callback callback})]
      (new-command raft command nil))))
 
+
 (defn monitor-raft
   "Debugging tool, registers a single-argument callback fn that will be
   called with each new raft event. To remove existing listen-fn, provide
@@ -302,11 +313,13 @@
   (let [event-chan (event-chan raft)]
     (async/put! event-chan [:monitor callback])))
 
+
 (defn latest-stored-snapshot [{:keys [snapshot-list-indexes] :as config}]
   (log/debug "Getting latest stored snapshot with" snapshot-list-indexes)
   (let [indexes (snapshot-list-indexes)]
     (log/debug "Got indexes:" indexes)
     (last indexes)))
+
 
 (defn- initialize-raft-state
   [{{:keys [log-directory snapshot-reify] :as config} :config :as raft-state}]
@@ -316,28 +329,28 @@
           log-entries      (try (raft-log/read-log-file latest-log-file)
                                 (catch FileNotFoundException _ nil))
           raft-state*      (reduce
-                            (fn [raft-state* entry]
-                              (let [[index term entry-type data] entry]
-                                (cond
-                                  (> index 0)
-                                  (assoc raft-state* :index index :term term)
+                             (fn [raft-state* entry]
+                               (let [[index term entry-type data] entry]
+                                 (cond
+                                   (> index 0)
+                                   (assoc raft-state* :index index :term term)
 
-                                  (= :current-term entry-type)
-                                  (assoc raft-state* :term term
-                                         :voted-for nil)
+                                   (= :current-term entry-type)
+                                   (assoc raft-state* :term term
+                                                      :voted-for nil)
 
-                                  (= :voted-for entry-type)
-                                  (if (= term (:term raft-state*))
-                                    (assoc raft-state* :voted-for data)
-                                    (assoc raft-state* :voted-for nil))
+                                   (= :voted-for entry-type)
+                                   (if (= term (:term raft-state*))
+                                     (assoc raft-state* :voted-for data)
+                                     (assoc raft-state* :voted-for nil))
 
-                                  (= :snapshot entry-type)
-                                  (assoc raft-state* :snapshot-index data
-                                         :snapshot-term term)
+                                   (= :snapshot entry-type)
+                                   (assoc raft-state* :snapshot-index data
+                                                      :snapshot-term term)
 
-                                  (= :no-op entry-type)
-                                  raft-state*)))
-                            raft-state log-entries)
+                                   (= :no-op entry-type)
+                                   raft-state*)))
+                             raft-state log-entries)
           snapshot-index   (when (pos-int? (:snapshot-index raft-state*))
                              (:snapshot-index raft-state*))
           snapshot-loaded? (when snapshot-index             ;; if a snapshot exists, reify it into the state-machine
@@ -350,10 +363,11 @@
       (if (and snapshot-index (not snapshot-loaded?))
         raft-state
         (cond-> (assoc raft-state* :log-file latest-log-file)
-          snapshot-index (assoc :index (max (:index raft-state*) snapshot-index)
-                                :commit snapshot-index))))
+                snapshot-index (assoc :index (max (:index raft-state*) snapshot-index)
+                                      :commit snapshot-index))))
     (catch Exception e (log/error e "Error initializing raft state from logs in: "
                                   log-directory))))
+
 
 (defn start
   "Config map consists of the following keys:
@@ -406,25 +420,25 @@
         _          (assert (fn? snapshot-xfer))
 
         config*    (assoc config :timeout-ms timeout-ms
-                          :heartbeat-ms heartbeat-ms
-                          :log-directory log-directory
-                          :send-rpc-fn send-rpc-fn
-                          :log-history log-history
-                          :snapshot-threshold snapshot-threshold
-                          :state-machine state-machine
-                          :snapshot-write snapshot-write
-                          :snapshot-xfer snapshot-xfer
-                          :snapshot-reify snapshot-reify
-                          :snapshot-install snapshot-install
-                          :snapshot-list-indexes snapshot-list-indexes
-                          :event-chan event-chan
-                          :command-chan command-chan
-                          :close-fn close-fn
-                          :leader-change leader-change-fn
-                          :default-command-timeout default-command-timeout
-                          :entries-max entries-max
-                          :entry-cache-size (or entry-cache-size entries-max) ;; we keep a local cache of last n entries, by default size of entries-max. Performance boost as most recent entry access does not require io
-                          :catch-up-rounds catch-up-rounds)
+                                 :heartbeat-ms heartbeat-ms
+                                 :log-directory log-directory
+                                 :send-rpc-fn send-rpc-fn
+                                 :log-history log-history
+                                 :snapshot-threshold snapshot-threshold
+                                 :state-machine state-machine
+                                 :snapshot-write snapshot-write
+                                 :snapshot-xfer snapshot-xfer
+                                 :snapshot-reify snapshot-reify
+                                 :snapshot-install snapshot-install
+                                 :snapshot-list-indexes snapshot-list-indexes
+                                 :event-chan event-chan
+                                 :command-chan command-chan
+                                 :close-fn close-fn
+                                 :leader-change leader-change-fn
+                                 :default-command-timeout default-command-timeout
+                                 :entries-max entries-max
+                                 :entry-cache-size (or entry-cache-size entries-max) ;; we keep a local cache of last n entries, by default size of entries-max. Performance boost as most recent entry access does not require io
+                                 :catch-up-rounds catch-up-rounds)
         _          (log/debug "Raft starting with config: " (pr-str config*))
         raft-state (-> {:id               (rand-int 100000) ;; opaque id, in case multiple raft processes are going
                         :watch-fns        (atom (if leader-change-fn
@@ -454,6 +468,7 @@
     (event-loop raft-state)
     raft-state))
 
+
 (defn add-leader-watch
   "Registers a function to be called with each leader change. Specify any key
   which can be used to unregister function later.
@@ -482,6 +497,7 @@
   ([raft key fn] (watch/add-leader-watch raft key fn nil))
   ([raft key fn event-type]
    (watch/add-leader-watch raft key fn event-type)))
+
 
 (defn remove-leader-watch
   "Removes watch function with specified key."

@@ -9,6 +9,7 @@
   (:import (java.util UUID)
            (java.io File)))
 
+
 (defn snapshot-xfer
   "Transfers snapshot from this server as leader, to a follower.
   Will be called with two arguments, snapshot id and part number.
@@ -33,6 +34,7 @@
       {:parts 1
        :data  ba})))
 
+
 (defn snapshot-installer
   "Installs a new snapshot being sent from a different server.
   Blocking until write succeeds. An error will stop RAFT entirely.
@@ -53,6 +55,7 @@
       (with-open [out (io/output-stream file :append true)]
         (.write out ^bytes snapshot-data)))))
 
+
 (defn snapshot-reify
   "Reifies a snapshot, should populate whatever data is needed into an initialized state machine
   that is used for raft.
@@ -65,6 +68,7 @@
           state (nippy/thaw-from-file file)]
       (reset! state-atom state))))
 
+
 (defn snapshot-writer
   "Blocking until write succeeds. An error will stop RAFT entirely."
   [path state-atom]
@@ -76,6 +80,7 @@
         (nippy/freeze-to-file file state)
         (callback)))))
 
+
 (defn snapshot-list-indexes
   "Lists all stored snapshot indexes, sorted ascending. Used for bootstrapping a
   raft network from a previously made snapshot."
@@ -85,6 +90,7 @@
         (raft-log/all-log-indexes "snapshot")
         sort
         vec)))
+
 
 (defn state-machine
   "Basic key-val store.
@@ -121,8 +127,10 @@
                (= cas-v (get new-state k)))
              false))))
 
+
 ;; will hold state of our started raft instances
 (def system nil)
+
 
 (defn send-rpc
   "Sends rpc call to specified server.
@@ -152,6 +160,7 @@
                   (callback data)))
       resp-chan)))
 
+
 (defn monitor-incoming-rcp
   "Receives incoming commands from external servers.
   In this case rpc-chan is called directly, but could originate from a tcp socket, websocket, etc."
@@ -165,14 +174,15 @@
         (let [[header data] rpc
               {:keys [op resp-chan]} header
               resp-header (assoc header :op (keyword (str (name op) "-response"))
-                                 :to (:from header)
-                                 :from (:to header))
+                                        :to (:from header)
+                                        :from (:to header))
               callback    (fn [x]
                             (log/trace this-server "OP Callback: " {:op op :request data :response x})
                             (async/put! resp-chan [resp-header x]))]
           (log/trace (str this-server " - incoming RPC: ") header data)
           (raft/invoke-rpc* event-chan op data callback)
           (recur))))))
+
 
 (defn close-fn
   "Close function cleans up local state."
@@ -182,6 +192,7 @@
     (alter-var-root #'system (fn [sys] (dissoc sys this-server)))
     ::closed))
 
+
 (defn start-instance
   [servers server-id]
   (let [rpc-chan           (async/chan)
@@ -190,8 +201,8 @@
         snapshot-dir       (str log-directory "snapshots/")
         raft               (raft/start {:this-server           server-id
                                         :leader-change-fn      (fn [x] (log/info
-                                                                        (str server-id " reports leader change to: "
-                                                                             (:leader x) " term: " (:term x))))
+                                                                         (str server-id " reports leader change to: "
+                                                                              (:leader x) " term: " (:term x))))
                                         :servers               servers
                                         :timeout-ms            1500
                                         :heartbeat-ms          500
@@ -210,6 +221,7 @@
      :state-atom state-machine-atom
      :rpc-chan   rpc-chan}))
 
+
 (defn launch-raft-system
   "Launches supplied number of raft instances. Stores their state and other data
   in the 'system' var that can be used to poke around, inquire about state, etc."
@@ -219,6 +231,7 @@
                         {} servers)]
     (alter-var-root #'system (constantly sys))
     :started))
+
 
 (defn view-raft-state
   "Displays current raft state for specified server."
@@ -234,6 +247,7 @@
   [system]
   (rand-nth (keys system)))
 
+
 (defn get-leader
   "Returns leader according to specified server."
   ([] (get-leader (random-server system)))
@@ -244,6 +258,7 @@
                                    (async/close! promise-chan)))]
      (view-raft-state server callback)
      (async/<!! promise-chan))))
+
 
 (defn rpc-async
   "Performs  rpc call to specified server, returns core async channel."
@@ -256,10 +271,12 @@
     (raft/new-entry raft entry callback)
     promise-chan))
 
+
 (defn rpc-sync
   "Performs a synchronous rpc call to specified server."
   [server entry]
   (async/<!! (rpc-async server entry)))
+
 
 (defn write
   "Writes value to specified key."
@@ -267,17 +284,20 @@
   ([server k v]
    (rpc-sync server [:write k v])))
 
+
 (defn write-async
   "Writes value to specified key, returns core async chan with eventual response."
   ([k v] (write (get-leader (random-server system)) k v))
   ([server k v]
    (rpc-async server [:write k v])))
 
+
 (defn read
   "Reads from leader after all pending commands are committed."
   ([k] (read (get-leader (random-server system)) k))
   ([server k]
    (rpc-sync server [:read k])))
+
 
 (defn dump-state
   "Dumps our full state machine state for given server"
@@ -286,11 +306,13 @@
         state-atom (get-in system [server :state-atom])]
     @state-atom))
 
+
 (defn read-local
   "Reads key from local state, doesn't sync across raft"
   ([k] (read-local (rand-nth (keys system)) k))
   ([server k]
    (get (dump-state server) k)))
+
 
 (defn cas
   "Compare and swap"
@@ -298,11 +320,13 @@
   ([server k compare swap]
    (rpc-sync server [:cas k compare swap])))
 
+
 (defn delete
   "Delete key"
   ([k] (delete (get-leader (random-server system)) k))
   ([server k]
    (rpc-sync server [:delete k])))
+
 
 (defn close
   "Closes specified server."
@@ -311,6 +335,7 @@
         raft   (get-in system [server :raft])]
     (raft/close raft)
     :closed))
+
 
 (comment
 
@@ -336,7 +361,8 @@
     (dotimes [i 100]
       (write-async leader (str "key-" i) (str "val-" i))))
 
-;; read a key, synchronized across servers (sends to leader)
+
+  ;; read a key, synchronized across servers (sends to leader)
   ;; will only read after all pending commands are processed
   (read "testkey")
 

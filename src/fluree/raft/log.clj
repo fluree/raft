@@ -6,14 +6,17 @@
            (java.net URI)
            (java.nio.file CopyOption Files Paths StandardCopyOption)))
 
+
 ;; if an index is not a positive integer (an append-entry), it is one of these special types:
 (def ^:const entry-types {:current-term -1 ;; record of the latest term we've seen
                           :voted-for    -2 ;; record of votes
                           :snapshot     -3 ;; record of new snapshots
                           :no-op        -4}) ;; used to clear out entries that are found to be incorrect
 
+
 ;; reverse map of above
 (def ^:const entry-types' (into {} (map (fn [[k v]] [v k]) entry-types)))
+
 
 (defn write-entry
   "Writes entry to specified log"
@@ -50,23 +53,28 @@
   (doseq [[index term _ entry-data] log]
     (write-entry file index term entry-data false)))
 
+
 (defn write-current-term
   "Record latest term we've seen to persistent log."
   [file term]
   (write-entry file (:current-term entry-types) term term))
 
+
 (defn write-voted-for
   [file term voted-for]
   (write-entry file (:voted-for entry-types) term voted-for))
+
 
 (defn write-snapshot
   [file snapshot-index snapshot-term]
   (write-entry file (:snapshot entry-types) snapshot-term snapshot-index))
 
+
 (defn write-new-command
   "Writes a new command as leader."
   [file index entry]
   (write-entry file index (:term entry) entry))
+
 
 (defn log-corrupt-exception
   "Given an exception thrown that is discovered in a corrupt log file, log its output in a readable format."
@@ -181,6 +189,7 @@
                             (throw-corrupt-file-exception message e raf file-name next-bytes index term entry-type nil))))]
     [index term entry-type entry-data]))
 
+
 (defn read-log-file
   "Reads entire log file."
   [^File file]
@@ -221,6 +230,7 @@
             log
             (recur (conj log next-entry))))))))
 
+
 (defn read-entry
   "Reads a specific index entry from durable log.
 
@@ -258,6 +268,7 @@
                 (.seek raf next-pointer)
                 (recur)))))))))
 
+
 (defn read-entry-range
   "Reads index from start-index (inclusive) to end-index (inclusive)."
   ([^File file start-index] (read-entry-range file start-index (Long/MAX_VALUE)))
@@ -291,13 +302,16 @@
                  (.seek raf next-pointer)
                  (recur acc))))))))))
 
+
 (def ^:private index->term-cache (atom {}))
 (def ^{:private true :const true} cache-size 10)
+
 
 (defn clear-index->term-cache
   "Clears cache"
   []
   (reset! index->term-cache {}))
+
 
 (defn assoc-index->term-cache
   "Implements a simple fifo cache."
@@ -317,11 +331,13 @@
   [index]
   (get-in @index->term-cache [index :val]))
 
+
 (defn index->term*
   "Returns term of specified index number."
   [file index]
   (-> (read-entry file index)
       :term))
+
 
 (defn index->term
   "Returns term of specified index number."
@@ -330,7 +346,8 @@
       (do
         (log/trace (format "Index->term cache miss for index: %s." index))
         (assoc-index->term-cache
-         index (index->term* file index)))))
+          index (index->term* file index)))))
+
 
 (defn remove-entries
   "Removes entries from log from start-index (inclusive) to end.
@@ -367,6 +384,7 @@
               (.seek raf next-pointer)
               (recur))))))))
 
+
 (defn append
   "Append entries to log starting after-index relative to current-index."
   [file entries after-index current-index]
@@ -385,6 +403,7 @@
       ;; perform append
       (append file entries after-index after-index))))
 
+
 (defn- return-log-id
   "Takes java file and returns log id (typically same as start index)
   from the file name as a long integer."
@@ -393,6 +412,7 @@
   ([^File file type]
    (when-let [match (re-find (re-pattern (str "^([0-9]+)\\." type "$")) (.getName file))]
      (Long/parseLong (second match)))))
+
 
 (defn all-log-indexes
   "Returns all index file names present in provided raft log path."
@@ -403,6 +423,7 @@
         (filter #(.isFile ^File %))
         (keep #(return-log-id % type)))))
 
+
 (defn latest-log-index
   "Returns the most recent (largest) log index point."
   ([path]
@@ -412,6 +433,7 @@
      (if (empty? all-idx-logs)
        nil
        (apply max all-idx-logs)))))
+
 
 (defn rotate-log
   "Rotates current log"

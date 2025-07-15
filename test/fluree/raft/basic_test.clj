@@ -22,10 +22,10 @@
 (defn- minimal-snapshot-fns
   "Returns minimal snapshot functions for a single-node test."
   [state-atom]
-  {:snapshot-write   (fn [file state]
+  {:snapshot-write   (fn [file state] 
                        (spit file (pr-str state)))
    :snapshot-reify   (fn [] @state-atom)
-   :snapshot-install (fn [snapshot _]
+   :snapshot-install (fn [snapshot _] 
                        (reset! state-atom snapshot))
    :snapshot-xfer    (fn [_ _] nil) ; No-op for single node
    :snapshot-list-indexes (fn [_] [])})
@@ -34,8 +34,8 @@
   "Helper to submit an entry and wait for the callback result."
   [raft-instance entry]
   (let [result-promise (promise)]
-    (raft/new-entry raft-instance entry
-                    (fn [success?]
+    (raft/new-entry raft-instance entry 
+                    (fn [success?] 
                       (deliver result-promise success?)))
     (deref result-promise 2000 false)))
 
@@ -49,44 +49,44 @@
     (with-tmp-dir
       (let [[state-machine state-atom] (create-state-machine)
             leader-atom (atom nil)
-
+            
             config (merge
                     {:servers          ["server1"]
                      :this-server      "server1"
                      :leader-change-fn (fn [event]
-                                         (reset! leader-atom (:new-leader event)))
-                     :send-rpc-fn      (fn [_ _ callback]
-                                         (when callback (callback nil)))
+                                        (reset! leader-atom (:new-leader event)))
+                     :send-rpc-fn      (fn [_ _ callback] 
+                                        (when callback (callback nil)))
                      :log-directory    tmp-dir
                      :state-machine    state-machine
                      :heartbeat-ms     50
                      :timeout-ms       100}
                     (minimal-snapshot-fns state-atom))
-
+            
             raft-instance (raft/start config)]
-
+        
         (try
           ;; Wait for leader election
           (Thread/sleep 1000)
-
+          
           (testing "leader election"
             (is (= "server1" @leader-atom) "Should elect itself as leader"))
-
+          
           (testing "set operation"
             (is (submit-entry raft-instance {:op :set :key "foo" :value "bar"}))
             (wait-for-processing)
             (is (= "bar" (get @state-atom "foo"))))
-
-          (testing "multiple operations"
+          
+          (testing "multiple operations" 
             (is (submit-entry raft-instance {:op :set :key "baz" :value "qux"}))
             (wait-for-processing)
             (is (= {"foo" "bar" "baz" "qux"} @state-atom)))
-
+          
           (testing "delete operation"
             (is (submit-entry raft-instance {:op :delete :key "foo"}))
             (wait-for-processing)
             (is (nil? (get @state-atom "foo")))
             (is (= "qux" (get @state-atom "baz"))))
-
+          
           (finally
             (raft/close raft-instance)))))))
