@@ -272,7 +272,7 @@
   - If the response has success: true, we'll update that server's stats and possibly update the commit index
   - If the response has success: false, we'll decrement that server's next-index and resend a new append-entry
     to that server immediately with older log entries."
-  [raft-state {:keys [server request response]}]
+  [{:keys [other-server] :as raft-state} {:keys [server request response]}]
   (log/trace "Append entries response from server:" server {:response response :request (dissoc request :entries)})
   (let [{:keys [term success]} response
         {:keys [prev-log-index entries pending?]} request
@@ -337,7 +337,7 @@
   [raft-state]
   (log/debug (format "Becoming leader, leader: %s, term: %s, latest index: %s."
                      (:this-server raft-state) (:term raft-state) (:index raft-state)))
-  (let [{:keys [this-server index servers]} raft-state
+  (let [{:keys [this-server index servers other-servers]} raft-state
         heartbeat-time (get-in raft-state [:config :heartbeat-ms])
         next-index     (inc index)
         server-ids     (keys servers)
@@ -490,7 +490,7 @@
   [raft-state {:keys [server request response]}]
   (log/debug "Config change response from server " server {:response response :request request})
   (let [raft-state* (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request)))
-        {:keys [term]} raft-state*]
+        {:keys [status term]} raft-state*]
     (if
       ;; remote server is newer term, become follower. Lose any pending config changes.
       ;; We only get a false response if follower has newer term.
@@ -519,14 +519,14 @@
 (defn close-leader
   [raft-state]
   (let [command-chan (get-in raft-state [:config :command-chan])]
-    (async/put! command-chan [:close])
-    raft-state))
+    (do (async/put! command-chan [:close])
+        raft-state)))
 
 (defn config-change-commit-response-event
   [raft-state {:keys [server request response]}]
   (log/debug "Config change commit response from server " server {:response response :request request})
   (let [raft-state* (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request)))
-        {:keys [term this-server]} raft-state*
+        {:keys [status term this-server]} raft-state*
         voting-server server]
     (if (> (:term response) term)
       ;; remote server is newer term, become follower. Lose any pending config changes.
@@ -539,7 +539,7 @@
                    :server     (:this-server raft-state)}]
         (events/become-follower raft-state* (:term response) nil cause))
 
-      (let [{:keys [server op]}     request
+      (let [{:keys [server op command-id]}     request
             config-change-status    (get-in raft-state [:config-change-committed :status])]
         (if (not= :complete config-change-status)
           (let [raft-state*   (update-in raft-state* [:config-change-committed :votes] conj voting-server)
@@ -591,11 +591,11 @@
           ;; to commit the new server.config
           (= :add op)
           (let [catch-up-rounds (-> raft-state :config :catch-up-rounds)]
-            (events/safe-callback callback {:op     :add
-                                            :server pending-server
-                                            :command-id command-id
-                                            :message (str "The server " pending-server " has " catch-up-rounds " rounds to sync its RAFT logs with the network.")})
-            (assoc raft-state :pending-server (merge events/server-state-baseline
+            (do (events/safe-callback callback {:op     :add
+                                                :server pending-server
+                                                :command-id command-id
+                                                :message (str "The server " pending-server " has " catch-up-rounds " rounds to sync its RAFT logs with the network.")})
+                (assoc raft-state :pending-server (merge events/server-state-baseline
                                                          {:id              pending-server
                                                           :op              :add
                                                           :command-id      command-id
@@ -606,8 +606,7 @@
                                     (ex-info
                                      (str "Cannot remove server if there are no other servers in the configuration.")
                                      {:operation :new-command
-                                      :error     :raft/cannot-remove-server}))
-              raft-state)
+                                      :error     :raft/cannot-remove-server})) raft-state)
 
           ;; Remove server can go immediately to all followers. Once a majority of the network
           ;; has this change committed, we'll change the configuration
@@ -620,11 +619,11 @@
                      :leader-id      this-server
                      :instant        (System/currentTimeMillis)
                      :command-id     command-id}]
-            (events/safe-callback callback {:op         :remove
-                                            :server     pending-server
-                                            :command-id command-id
-                                            :message    (str "The server " pending-server " is slated to be removed from the network.")})
-            (reduce (fn [rs recipient-server]
+            (do (events/safe-callback callback {:op         :remove
+                                                :server     pending-server
+                                                :command-id command-id
+                                                :message    (str "The server " pending-server " is slated to be removed from the network.")})
+                (reduce (fn [rs recipient-server]
                           (let [callback (fn [response]
                                            (async/put! event-chan
                                                        [:config-change-response
@@ -632,7 +631,7 @@
                                                          :request  req
                                                          :response response}]))]
                             (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
-                        raft-state other-servers))))
+                        raft-state other-servers))))))
 
 (defn new-command-event
   "Processes new commands. Only happens if currently a raft leader."

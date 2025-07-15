@@ -4,10 +4,10 @@
             [clojure.core.async :as async]
             [fluree.raft :as raft]
             [clojure.tools.logging :as log]
-            [fluree.raft.log :as raft-log]
-            [clojure.pprint :as pprint])
+            [fluree.raft.log :as raft-log])
   (:refer-clojure :exclude [read])
-  (:import (java.util UUID)))
+  (:import (java.util UUID)
+           (java.io File)))
 
 (defn snapshot-xfer
   "Transfers snapshot from this server as leader, to a follower.
@@ -23,7 +23,7 @@
   requested. A snapshot should be broken into multiple parts if it is larger than
   the amount of data you want to push across the network at once."
   [path]
-  (fn [id _]
+  (fn [id part]
     ;; in this example we do everything in one part, regardless of snapshot size
     (let [file (io/file path (str id ".snapshot"))
           ba   (byte-array (.length file))
@@ -42,7 +42,7 @@
   As soon as final part write succeeds, can safely garbage collect any old snapshots on disk except the most recent one."
   [path]
   (fn [snapshot-map]
-    (let [{:keys [snapshot-index snapshot-part snapshot-data]} snapshot-map
+    (let [{:keys [leader-id snapshot-term snapshot-index snapshot-part snapshot-parts snapshot-data]} snapshot-map
           file (io/file path (str snapshot-index ".snapshot"))]
 
       (when (= 1 snapshot-part)
@@ -103,7 +103,7 @@
               swap val to cas-v. Returns true on success and false on failure.
               i.e. [:cas 'mykey' 100 42] - swaps 'mykey' to 42 if current val is 100."
   [state-atom]
-  (fn [[op k v cas-v] _]
+  (fn [[op k v cas-v] raft-state]
     (case op
       :write (do (swap! state-atom assoc k v)
                  true)
@@ -222,7 +222,7 @@
 
 (defn view-raft-state
   "Displays current raft state for specified server."
-  ([server] (view-raft-state server (fn [x] (pprint/pprint (dissoc x :config)))))
+  ([server] (view-raft-state server (fn [x] (clojure.pprint/pprint (dissoc x :config)))))
   ([server callback]
    (let [server     (if (keyword? server) server (keyword (str server)))
          raft       (get-in system [server :raft])
