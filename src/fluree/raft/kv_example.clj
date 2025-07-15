@@ -1,13 +1,13 @@
 (ns fluree.raft.kv-example
   (:require [clojure.java.io :as io]
+            [clojure.pprint :as pprint]
             [taoensso.nippy :as nippy]
             [clojure.core.async :as async]
             [fluree.raft :as raft]
             [clojure.tools.logging :as log]
             [fluree.raft.log :as raft-log])
   (:refer-clojure :exclude [read])
-  (:import (java.util UUID)
-           (java.io File)))
+  (:import (java.util UUID)))
 
 (defn snapshot-xfer
   "Transfers snapshot from this server as leader, to a follower.
@@ -222,7 +222,7 @@
 
 (defn view-raft-state
   "Displays current raft state for specified server."
-  ([server] (view-raft-state server (fn [x] (clojure.pprint/pprint (dissoc x :config)))))
+  ([server] (view-raft-state server (fn [x] (pprint/pprint (dissoc x :config)))))
   ([server callback]
    (let [server     (if (keyword? server) server (keyword (str server)))
          raft       (get-in system [server :raft])
@@ -336,8 +336,7 @@
     (dotimes [i 100]
       (write-async leader (str "key-" i) (str "val-" i))))
 
-
-  ;; read a key, synchronized across servers (sends to leader)
+;; read a key, synchronized across servers (sends to leader)
   ;; will only read after all pending commands are processed
   (read "testkey")
 

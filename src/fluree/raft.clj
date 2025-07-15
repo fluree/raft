@@ -241,8 +241,7 @@
                                          (pr-str data) ". Ignoring call.")
                               raft-state))
 
-
-                    ;; close down all pending callbacks
+;; close down all pending callbacks
                     :close
                     (let [callback-chans (vals (:command-callbacks raft-state))]
                       (doseq [c callback-chans]
