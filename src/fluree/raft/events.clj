@@ -62,10 +62,10 @@
           raft-state* (dissoc raft-state :msg-queue)]
       (reduce-kv
        (fn [raft-state* server-id message]
-         (let [_ (apply send-rpc-fn raft-state* server-id message)]
-           (if-let [msgs (get-in raft-state* [:servers server-id :stats :sent])]
-             (assoc-in raft-state* [:servers server-id :stats :sent] (inc msgs))
-             raft-state*)))
+         (apply send-rpc-fn raft-state* server-id message)
+         (if-let [msgs (get-in raft-state* [:servers server-id :stats :sent])]
+           (assoc-in raft-state* [:servers server-id :stats :sent] (inc msgs))
+           raft-state*))
        raft-state* msg-queue))
     raft-state))
 
@@ -169,25 +169,25 @@
          raft-state* (assoc raft-state :pending-server nil)]
      (safe-callback callback {:term (:term raft-state*) :success true})
      (condp = op
-       :add (if (= (:this-server raft-state) server)
-              raft-state*
-              (-> raft-state*
-                  (update-in [:config :servers] conj-distinct server)
-                  (update-in [:other-servers] conj-distinct server)
-                  (assoc-in [:servers server] server-state)))
+           :add (if (= (:this-server raft-state) server)
+                  raft-state*
+                  (-> raft-state*
+                      (update-in [:config :servers] conj-distinct server)
+                      (update-in [:other-servers] conj-distinct server)
+                      (assoc-in [:servers server] server-state)))
 
-       :remove (let [cfg-servers    (get-in raft-state* [:config :servers])
-                     cfg-servers*   (filterv #(not= server %) cfg-servers)
+           :remove (let [cfg-servers    (get-in raft-state* [:config :servers])
+                         cfg-servers*   (filterv #(not= server %) cfg-servers)
 
-                     other-servers  (get-in raft-state* [:other-servers])
-                     other-servers* (filterv #(not= server %) other-servers)
+                         other-servers  (get-in raft-state* [:other-servers])
+                         other-servers* (filterv #(not= server %) other-servers)
 
-                     servers        (-> (:servers raft-state*)
-                                        (dissoc server))]
-                 (-> raft-state*
-                     (assoc-in [:config :servers] cfg-servers*)
-                     (assoc-in [:other-servers] other-servers*)
-                     (assoc-in [:servers] servers)))))))
+                         servers        (-> (:servers raft-state*)
+                                            (dissoc server))]
+                     (-> raft-state*
+                         (assoc-in [:config :servers] cfg-servers*)
+                         (assoc-in [:other-servers] other-servers*)
+                         (assoc-in [:servers] servers)))))))
 
 (defn update-commits
   "Process new commits if leader-commit is updated.

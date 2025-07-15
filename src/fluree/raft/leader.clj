@@ -596,10 +596,10 @@
                                             :command-id command-id
                                             :message (str "The server " pending-server " has " catch-up-rounds " rounds to sync its RAFT logs with the network.")})
             (assoc raft-state :pending-server (merge events/server-state-baseline
-                                                     {:id              pending-server
-                                                      :op              :add
-                                                      :command-id      command-id
-                                                      :catch-up-rounds catch-up-rounds})))
+                                                         {:id              pending-server
+                                                          :op              :add
+                                                          :command-id      command-id
+                                                          :catch-up-rounds catch-up-rounds}))))
 
           (and (empty? other-servers) (= :remove op))
           (do (events/safe-callback callback
@@ -625,14 +625,14 @@
                                             :command-id command-id
                                             :message    (str "The server " pending-server " is slated to be removed from the network.")})
             (reduce (fn [rs recipient-server]
-                      (let [callback (fn [response]
-                                       (async/put! event-chan
-                                                   [:config-change-response
-                                                    {:server   recipient-server
-                                                     :request  req
-                                                     :response response}]))]
-                        (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
-                    raft-state other-servers)))))
+                          (let [callback (fn [response]
+                                           (async/put! event-chan
+                                                       [:config-change-response
+                                                        {:server   recipient-server
+                                                         :request  req
+                                                         :response response}]))]
+                            (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
+                        raft-state other-servers))))
 
 (defn new-command-event
   "Processes new commands. Only happens if currently a raft leader."

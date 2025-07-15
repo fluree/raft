@@ -89,7 +89,7 @@
 
 (defn move-log
   "Moves the source log file to destination-file."
-  [^File source-file ^File destination-file]
+  [source-file destination-file]
   (Files/move (.toPath source-file) (.toPath destination-file)
               (into-array CopyOption [StandardCopyOption/ATOMIC_MOVE
                                       StandardCopyOption/REPLACE_EXISTING])))
