@@ -1,0 +1,29 @@
+{:paths ["src" "resources"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        jepsen/jepsen {:mvn/version "0.3.5"}
+        com.fluree/raft {:local/root ".."}
+        clj-http/clj-http {:mvn/version "3.12.3"}
+        org.clojure/data.json {:mvn/version "2.4.0"}
+        com.taoensso/nippy {:mvn/version "3.2.0"}
+        ring/ring-core {:mvn/version "1.9.6"}
+        ring/ring-jetty-adapter {:mvn/version "1.9.6"}
+        ring/ring-json {:mvn/version "0.5.1"}
+        net.async/async {:mvn/version "0.1.0"}}
+ 
+ :aliases
+ {;; Main Jepsen test (default)
+  :netasync {:main-opts ["-m" "jepsen-raft.test"]
+             :description "Net.async TCP-based test"}
+  
+  ;; Dockerized net.async with network failure testing
+  :netasync-docker {:main-opts ["-m" "jepsen-raft.test-docker"]
+                    :description "Dockerized net.async test with network partition nemesis"}
+  
+  ;; Performance testing
+  :performance {:main-opts ["-m" "jepsen-raft.test-performance"]
+                :description "Run performance stress tests with centralized config"}
+  
+  ;; Development tools
+  :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}
+         :main-opts ["-m" "clj-kondo.main" "--lint" "src"]
+         :description "Lint source code with clj-kondo"}}}

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Reduce noise from HTTP libraries -->
+    <logger name="org.eclipse.jetty" level="WARN"/>
+    <logger name="org.apache.http" level="WARN"/>
+    <logger name="org.apache.http.wire" level="ERROR"/>
+    
+    <!-- Our namespaces with more detail -->
+    <logger name="jepsen-raft.tests.netasync" level="DEBUG"/>
+    <logger name="jepsen-raft.util" level="DEBUG"/>
+    <logger name="jepsen-raft.model" level="DEBUG"/>
+    <logger name="fluree.raft" level="INFO"/>
+    <logger name="net.async" level="INFO"/>
+    
+    <!-- Root logger -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT" />
+    </root>
+</configuration>
