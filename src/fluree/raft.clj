@@ -241,8 +241,7 @@
                                          (pr-str data) ". Ignoring call.")
                               raft-state))
 
-
-                    ;; close down all pending callbacks
+;; close down all pending callbacks
                     :close
                     (let [callback-chans (vals (:command-callbacks raft-state))]
                       (doseq [c callback-chans]
@@ -307,14 +306,14 @@
   (let [event-chan (event-chan raft)]
     (async/put! event-chan [:monitor callback])))
 
-(defn latest-stored-snapshot [{:keys [snapshot-list-indexes] :as config}]
+(defn latest-stored-snapshot [{:keys [snapshot-list-indexes] :as _config}]
   (log/debug "Getting latest stored snapshot with" snapshot-list-indexes)
   (let [indexes (snapshot-list-indexes)]
     (log/debug "Got indexes:" indexes)
     (last indexes)))
 
 (defn- initialize-raft-state
-  [{{:keys [log-directory snapshot-reify] :as config} :config :as raft-state}]
+  [{{:keys [log-directory snapshot-reify] :as _config} :config :as raft-state}]
   (try
     (let [latest-log       (or (raft-log/latest-log-index log-directory) 0)
           latest-log-file  (io/file log-directory (str latest-log ".raft"))

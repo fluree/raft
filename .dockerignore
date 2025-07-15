@@ -1,5 +1,43 @@
+# Version control
 .git/
-.idea/
-.cpcache/
-*.iml
+.gitignore
+
+# Build artifacts
 target/
+*.jar
+*.class
+pom.xml
+pom.xml.asc
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+.lsp/
+.clj-kondo/.cache/
+.cpcache/
+
+# Test artifacts
+test-results/
+jepsen-raft/store/
+jepsen-raft/logs/
+jepsen-raft/test-results/
+scanning_results/
+*.log
+
+# Documentation
+docs/
+
+# CI/CD
+.github/
+.circleci/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.swp
+*~
+.#*
+\#*#
