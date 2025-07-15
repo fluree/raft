@@ -207,7 +207,9 @@
                       raft-state
                       (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request))))
         done?       (or (not (pos-int? next-part))
-                        (and (int? next-part) (> next-part snapshot-parts)))]
+                        (and (int? next-part) 
+                             snapshot-parts 
+                             (> next-part snapshot-parts)))]
     (cond
       ;; lost leadership
       (not (is-leader? raft-state*))
