@@ -5,29 +5,28 @@
             [clojure.tools.logging :as log]
             [fluree.raft.watch :as watch]))
 
-
 (defn update-server-stats
   "Updates some basic stats on servers when we receive a response.
 
   Server stats have the following keys:
   - sent         - number of messages sent
   - received     - number of responses received
-  - avg-response - average response time in nanoseconds"
+  - avg-response - average response time in nanoseconds
+  - last-response-ms - timestamp of last response (any response, including failures)"
   [raft-state server response-time]
   (if (get-in raft-state [:servers server])
     (update-in raft-state [:servers server :stats]
-                 (fn [stats]
-                   (let [{:keys [received avg-response]} stats
-                         received* (inc received)]
-                     (assoc stats :received received*
-                                  :avg-response (float (/ (+ response-time (* received avg-response)) received*))))))
+               (fn [stats]
+                 (let [{:keys [received avg-response]} stats
+                       received* (inc received)]
+                   (assoc stats :received received*
+                          :avg-response (float (/ (+ response-time (* received avg-response)) received*))
+                          :last-response-ms (System/currentTimeMillis)))))
     raft-state))
-
 
 (defn is-leader?
   [raft-state]
   (= :leader (:status raft-state)))
-
 
 (defn- minimum-majority
   "With a sequence of numbers, returns the highest number the majority is
@@ -38,7 +37,6 @@
        (drop (Math/floor (/ (count seq) 2)))
        (first)))
 
-
 (defn recalc-commit-index
   "Recalculates commit index and returns value given a server config map from raft. (:servers raft-state).
   Pulls all :match-index values and returns the minimum match index that the majority holds."
@@ -48,14 +46,12 @@
        (map :match-index)
        (minimum-majority)))
 
-
 (defn update-commit
   [raft-state]
   (assoc raft-state :commit (->> (:servers raft-state)
                                  vals
                                  (map :match-index)
                                  (minimum-majority))))
-
 
 (defn- queue-install-snapshot
   ([raft-state server]
@@ -83,10 +79,9 @@
                                                                                :request  (dissoc data :snapshot-data)
                                                                                :response response}]))]
      (cond-> raft-state
-             true (assoc-in [:msg-queue server] [:install-snapshot data callback])
-             pending? (update :pending-server #(assoc % :snapshot-index snapshot-index))
-             (not pending?) (update-in [:servers server] #(assoc % :snapshot-index snapshot-index))))))
-
+       true (assoc-in [:msg-queue server] [:install-snapshot data callback])
+       pending? (update :pending-server #(assoc % :snapshot-index snapshot-index))
+       (not pending?) (update-in [:servers server] #(assoc % :snapshot-index snapshot-index))))))
 
 (defn queue-add-server
   [raft-state server]
@@ -120,19 +115,18 @@
 
           :else
         ;; Else remove server from raft-state and shut-down
-        (let [_ (log/warn (str "Server " server " did not sync in the allotted number of rounds. Please delete this server's files, and attempt to add again. Depending on your network's connectivity, you may want to increase :fdb-group-catch-up-rounds."))
-              cfg-servers (get-in raft-state [:config :servers])
-              cfg-servers* (filterv #(not= server %) cfg-servers)
-              other-servers (:other-servers raft-state)
-              other-servers* (filterv #(not= server %) other-servers)
-              servers (-> (:servers raft-state)
-                          (dissoc server))
-              rs (-> (assoc-in raft-state [:config :servers] cfg-servers*)
-                     (assoc-in [:other-servers] other-servers*)
-                     (assoc-in [:servers] servers)
-                     (dissoc :pending-server))]
-          (assoc-in rs [:msg-queue server] [:close :add-server-timeout nil])))))
-
+          (let [_ (log/warn (str "Server " server " did not sync in the allotted number of rounds. Please delete this server's files, and attempt to add again. Depending on your network's connectivity, you may want to increase :fdb-group-catch-up-rounds."))
+                cfg-servers (get-in raft-state [:config :servers])
+                cfg-servers* (filterv #(not= server %) cfg-servers)
+                other-servers (:other-servers raft-state)
+                other-servers* (filterv #(not= server %) other-servers)
+                servers (-> (:servers raft-state)
+                            (dissoc server))
+                rs (-> (assoc-in raft-state [:config :servers] cfg-servers*)
+                       (assoc-in [:other-servers] other-servers*)
+                       (assoc-in [:servers] servers)
+                       (dissoc :pending-server))]
+            (assoc-in rs [:msg-queue server] [:close :add-server-timeout nil])))))
 
 ;; TODO - rename :snapshot-index in server state to something like :sending-snapshot, so different name than what is in raft-state
 (defn- queue-append-entry
@@ -188,12 +182,10 @@
                                                                                   :response response}]))
              message        [:append-entries data callback]]
          (cond-> raft-state*
-                 true (assoc-in [:msg-queue server] message)
-                 pending?       (assoc-in [:pending-server :next-index] (inc end-index))
-                 (not pending?) (assoc-in [:servers server :next-index] (inc end-index))))))))
+           true (assoc-in [:msg-queue server] message)
+           pending?       (assoc-in [:pending-server :next-index] (inc end-index))
+           (not pending?) (assoc-in [:servers server :next-index] (inc end-index))))))))
              ;; update next-index, we will send out parallel updates as needed
-
-
 
 (defn install-snapshot-response-event
   "Response map contains two keys:
@@ -207,7 +199,9 @@
                       raft-state
                       (update-server-stats raft-state server (- (System/currentTimeMillis) (:instant request))))
         done?       (or (not (pos-int? next-part))
-                        (and (int? next-part) (> next-part snapshot-parts)))]
+                        (and (int? next-part)
+                             snapshot-parts
+                             (> next-part snapshot-parts)))]
     (cond
       ;; lost leadership
       (not (is-leader? raft-state*))
@@ -226,21 +220,20 @@
 
       done?
       (cond-> raft-state*
-              pending?       (update-in [:pending-server]
-                                        #(assoc % :next-index (inc snapshot-index)
-                                                  :match-index snapshot-index
-                                                  :snapshot-index nil))
-              (not pending?) (update-in [:servers server]
-                                        #(assoc % :next-index (inc snapshot-index)
-                                                  :match-index snapshot-index
-                                                  :snapshot-index nil))
-              true (update-commit)
-              true (queue-append-entry server pending?))
+        pending?       (update-in [:pending-server]
+                                  #(assoc % :next-index (inc snapshot-index)
+                                          :match-index snapshot-index
+                                          :snapshot-index nil))
+        (not pending?) (update-in [:servers server]
+                                  #(assoc % :next-index (inc snapshot-index)
+                                          :match-index snapshot-index
+                                          :snapshot-index nil))
+        true (update-commit)
+        true (queue-append-entry server pending?))
 
       ;; send next part of snapshot
       (not done?)
       (queue-install-snapshot raft-state* server snapshot-index snapshot-term (inc snapshot-part) pending?))))
-
 
 (defn queue-append-entries
   "Forces update messages for all servers to be placed in the queue.
@@ -254,27 +247,26 @@
                                                            :next-heartbeat (+ (System/currentTimeMillis)
                                                                               heartbeat-time)})
     (let [raft-state*    (cond ;; Attempting to add server and time to check if it's synced
-                              (and pending-server
-                                   (= :add (get-in raft-state [:pending-server :op]))
-                                   (= 0 (get-in raft-state [:pending-server :catch-up-rounds])))
-                              (queue-add-server raft-state (:id pending-server))
+                           (and pending-server
+                                (= :add (get-in raft-state [:pending-server :op]))
+                                (= 0 (get-in raft-state [:pending-server :catch-up-rounds])))
+                           (queue-add-server raft-state (:id pending-server))
 
                               ;; Pending server * addition *, if we're pending server deletion, it'll still be in other-servers
-                              (and pending-server
-                                   (= :add (get-in raft-state [:pending-server :op])))
-                              (let [rs* (queue-append-entry raft-state (:id pending-server) true)]
-                                (reduce (fn [raft-state* server]
-                                            (queue-append-entry raft-state* server)) rs* other-servers))
+                           (and pending-server
+                                (= :add (get-in raft-state [:pending-server :op])))
+                           (let [rs* (queue-append-entry raft-state (:id pending-server) true)]
+                             (reduce (fn [raft-state* server]
+                                       (queue-append-entry raft-state* server)) rs* other-servers))
 
                               ;; No pending server, just append entries
-                              :else
-                              (reduce (fn [raft-state* server]
-                                        (queue-append-entry raft-state* server)) raft-state other-servers))]
+                           :else
+                           (reduce (fn [raft-state* server]
+                                     (queue-append-entry raft-state* server)) raft-state other-servers))]
 
       (assoc raft-state* :timeout (async/timeout heartbeat-time)
-                      :timeout-ms heartbeat-time
-                      :timeout-at (+ heartbeat-time (System/currentTimeMillis))))))
-
+             :timeout-ms heartbeat-time
+             :timeout-at (+ heartbeat-time (System/currentTimeMillis))))))
 
 (defn append-entries-response-event
   "Updates raft state with an append-entries response. Responses may come out of order.
@@ -297,59 +289,58 @@
         next-index  (inc (+ prev-log-index (count entries)))]
     (cond (not active?) raft-state*
       ;; if we are no longer leader, ignore response
-      (not (is-leader? raft-state*)) raft-state*
+          (not (is-leader? raft-state*)) raft-state*
 
       ;; response has a newer term, go to follower status and reset election timeout
-      (> term (:term raft-state*))
-      (let [cause {:cause      :append-entries-response
-                   :old-leader (:this-server raft-state)
-                   :new-leader nil
-                   :message    (str "Append entries response from server " server
-                                    " returned term " term ", and current term is "
-                                    (:term raft-state*) ".")
-                   :server     (:this-server raft-state)}]
-        (-> raft-state*
-            (events/become-follower term nil cause)))
+          (> term (:term raft-state*))
+          (let [cause {:cause      :append-entries-response
+                       :old-leader (:this-server raft-state)
+                       :new-leader nil
+                       :message    (str "Append entries response from server " server
+                                        " returned term " term ", and current term is "
+                                        (:term raft-state*) ".")
+                       :server     (:this-server raft-state)}]
+            (-> raft-state*
+                (events/become-follower term nil cause)))
 
       ;; update successful
-      (and (true? success) pending?)
-      (-> raft-state*
-          (update :pending-server #(assoc % :next-index (max next-index (:next-index %))
-                                                 :match-index (max (dec next-index) (:match-index %)))))
+          (and (true? success) pending?)
+          (-> raft-state*
+              (update :pending-server #(assoc % :next-index (max next-index (:next-index %))
+                                              :match-index (max (dec next-index) (:match-index %)))))
 
-      (true? success)
-      (-> raft-state*
-          (update-in [:servers server] #(assoc % :next-index (max next-index (:next-index %))
-                                                 :match-index (max (dec next-index) (:match-index %)))))
+          (true? success)
+          (-> raft-state*
+              (update-in [:servers server] #(assoc % :next-index (max next-index (:next-index %))
+                                                   :match-index (max (dec next-index) (:match-index %)))))
 
       ;; update failed - decrement next-index to prev-log-index of original request and re-send
-      (false? success)
-      (let [next-index    (if pending?
-                            (get-in raft-state* [:pending-server :next-index])
-                            (get-in raft-state* [:servers server :next-index]))
+          (false? success)
+          (let [next-index    (if pending?
+                                (get-in raft-state* [:pending-server :next-index])
+                                (get-in raft-state* [:servers server :next-index]))
             ;; we already got back a response that this index point wasn't valid, don't re-trigger sending another message
-            old-response? (<= next-index prev-log-index)]
-        (cond-> raft-state*
-                pending? (update  :pending-server
-                                    (fn [server-state]
+                old-response? (<= next-index prev-log-index)]
+            (cond-> raft-state*
+              pending? (update  :pending-server
+                                (fn [server-state]
                                       ;; in the case we got an out-of-order response, next-index might already be set lower than
                                       ;; prev-log-index for this request, take the minimum
-                                      (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
+                                  (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
 
-                (not pending?) (update-in [:servers server]
-                                          (fn [server-state]
+              (not pending?) (update-in [:servers server]
+                                        (fn [server-state]
                                             ;; in the case we got an out-of-order response, next-index might already be set lower than
                                             ;; prev-log-index for this request, take the minimum
-                                            (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
+                                          (assoc server-state :next-index (min prev-log-index (:next-index server-state)))))
 
-                (not old-response?) (queue-append-entry server pending?))))))
-
+              (not old-response?) (queue-append-entry server pending?))))))
 
 (defn- become-leader
   "Once majority of votes to elect us as leader happen, actually become new leader for term leader-term."
   [raft-state]
-  (log/debug (format "Becoming leader, leader: %s, term: %s, latest index: %s."
-                     (:this-server raft-state) (:term raft-state) (:index raft-state)))
+  (log/info (format "Becoming leader, leader: %s, term: %s, latest index: %s."
+                    (:this-server raft-state) (:term raft-state) (:index raft-state)))
   (let [{:keys [this-server index servers other-servers]} raft-state
         heartbeat-time (get-in raft-state [:config :heartbeat-ms])
         next-index     (inc index)
@@ -362,12 +353,12 @@
                                                                           0))))
                                servers server-ids)
         raft-state*    (assoc raft-state :status :leader
-                                         :leader this-server
-                                         :servers servers*
-                                         :pending-server nil
-                                         :timeout (async/timeout heartbeat-time)
-                                         :timeout-ms heartbeat-time
-                                         :timeout-at (+ heartbeat-time (System/currentTimeMillis)))]
+                              :leader this-server
+                              :servers servers*
+                              :pending-server nil
+                              :timeout (async/timeout heartbeat-time)
+                              :timeout-ms heartbeat-time
+                              :timeout-at (+ heartbeat-time (System/currentTimeMillis)))]
     (watch/call-leader-watch {:event          :become-leader
                               :cause          :become-leader
                               :old-leader     (:leader raft-state)
@@ -385,7 +376,6 @@
       ;          raft-state* other-servers)
         (queue-append-entries))))
 
-
 (defn request-vote-response-event
   [raft-state {:keys [server request response]}]
   (log/debug "Request vote response from server " server {:response response :request request})
@@ -394,7 +384,7 @@
         candidate?  (= :candidate status)]
     (cond
       ;; remote server is newer term, become follower
-      (> (:term response) term)
+      (and (:term response) (> (:term response) term))
       (let [cause {:cause      :request-vote-response
                    :old-leader (:leader raft-state)
                    :new-leader nil
@@ -425,11 +415,14 @@
                                ;; make sure votes in state are for this term
                                (filter #(and (= proposed-term (first %)) (true? (second %))))
                                (count))
-            majority?     (> votes-for (/ (count (:servers raft-state*)) 2))]
+            majority?     (> votes-for (/ (count (:servers raft-state*)) 2))
+            votes-from    (keys (filter (fn [[_ state]]
+                                          (let [[t granted] (:vote state)]
+                                            (and (= t proposed-term) granted)))
+                                        (:servers raft-state*)))]
         (if majority?
           (become-leader raft-state*)
           raft-state*)))))
-
 
 (defn request-votes
   "Request votes for leadership from all followers."
@@ -481,7 +474,6 @@
           (events/update-commits (:index raft-state*)))
       raft-state*)))
 
-
 (defn queue-apply-config-change
   [raft-state request]
   (let [{:keys [other-servers term]} raft-state
@@ -499,9 +491,8 @@
                                             {:server   recipient-server
                                              :request  req
                                              :response response}]))]
-                 (assoc-in rs [:msg-queue recipient-server] [:config-change-commit req callback])))
+                (assoc-in rs [:msg-queue recipient-server] [:config-change-commit req callback])))
             raft-state (conj other-servers server))))
-
 
 (defn config-change-response-event
   [raft-state {:keys [server request response]}]
@@ -511,8 +502,8 @@
     (if
       ;; remote server is newer term, become follower. Lose any pending config changes.
       ;; We only get a false response if follower has newer term.
-      (or (false? (:success response))
-          (> (:term response) term))
+     (or (false? (:success response))
+         (> (:term response) term))
       (let [cause {:cause      :config-change-response
                    :old-leader (:leader raft-state)
                    :new-leader nil
@@ -530,16 +521,14 @@
                                  (dissoc :votes :op :catch-up-rounds :command-id))]
             (->  raft-state
                  (events/apply-config-change request server-state)
-                (queue-apply-config-change request)))
+                 (queue-apply-config-change request)))
           raft-state*)))))
-
 
 (defn close-leader
   [raft-state]
   (let [command-chan (get-in raft-state [:config :command-chan])]
     (do (async/put! command-chan [:close])
         raft-state)))
-
 
 (defn config-change-commit-response-event
   [raft-state {:keys [server request response]}]
@@ -566,16 +555,15 @@
                 majority?     (> pending-votes (/ (count (:servers raft-state*)) 2))]
             (if majority?
               ;; If add server, just remove all pending info
-               (cond-> raft-state*
-                       true (assoc :pending-server nil)
-                       true (assoc-in [:config-change-commit-response :status] :complete)
-                       (and (= :remove op)
-                            (= server this-server)) (close-leader)
-                       (and (= :remove op)
-                            (not= server this-server)) (assoc-in [:msg-queue server] [:close :removed-server nil]))
+              (cond-> raft-state*
+                true (assoc :pending-server nil)
+                true (assoc-in [:config-change-commit-response :status] :complete)
+                (and (= :remove op)
+                     (= server this-server)) (close-leader)
+                (and (= :remove op)
+                     (not= server this-server)) (assoc-in [:msg-queue server] [:close :removed-server nil]))
               raft-state*))
           raft-state*)))))
-
 
 (defn queue-config-change
   [{:keys [this-server other-servers] :as raft-state} data callback op]
@@ -584,26 +572,26 @@
           ;; server already exists, return raft state
           (do (events/safe-callback callback
                                     (ex-info
-                                      (str pending-server " already exists in our network configuration.")
-                                      {:operation :new-command
-                                       :error     :raft/cannot-add-server})) raft-state)
+                                     (str pending-server " already exists in our network configuration.")
+                                     {:operation :new-command
+                                      :error     :raft/cannot-add-server})) raft-state)
 
           (and (= :remove op) (not (get-in raft-state [:servers pending-server])))
           ;; server already exists, return raft state
           (do (events/safe-callback callback
                                     (ex-info
-                                      (str pending-server " is not in our network configuration. Cannot remove.")
-                                      {:operation :new-command
-                                       :error     :raft/cannot-remove-server})) raft-state)
+                                     (str pending-server " is not in our network configuration. Cannot remove.")
+                                     {:operation :new-command
+                                      :error     :raft/cannot-remove-server})) raft-state)
 
           (:pending-server raft-state)
           ;; In the middle of adding or removing a server, cannot make two config changes at once.
           (do (events/safe-callback callback
                                     (ex-info
-                                      (str "Cannot have two configuration changes pending at once. Currently attempting to "
-                                           (-> raft-state :pending-server :op str (subs 1)) " " (-> raft-state :pending-server :id))
-                                      {:operation :new-command
-                                       :error     :raft/cannot-add-server})) raft-state)
+                                     (str "Cannot have two configuration changes pending at once. Currently attempting to "
+                                          (-> raft-state :pending-server :op str (subs 1)) " " (-> raft-state :pending-server :id))
+                                     {:operation :new-command
+                                      :error     :raft/cannot-add-server})) raft-state)
 
           ;; Add server to leader's :pending-server ONLY. This means the server has
           ;; (-> raft :config :catch-up-rounds) - default 10 - rounds to catch up.
@@ -624,9 +612,9 @@
           (and (empty? other-servers) (= :remove op))
           (do (events/safe-callback callback
                                     (ex-info
-                                      (str "Cannot remove server if there are no other servers in the configuration.")
-                                      {:operation :new-command
-                                       :error     :raft/cannot-remove-server})) raft-state)
+                                     (str "Cannot remove server if there are no other servers in the configuration.")
+                                     {:operation :new-command
+                                      :error     :raft/cannot-remove-server})) raft-state)
 
           ;; Remove server can go immediately to all followers. Once a majority of the network
           ;; has this change committed, we'll change the configuration
@@ -652,7 +640,6 @@
                                                          :response response}]))]
                             (assoc-in rs [:msg-queue recipient-server] [:config-change req callback])))
                         raft-state other-servers))))))
-
 
 (defn new-command-event
   "Processes new commands. Only happens if currently a raft leader."

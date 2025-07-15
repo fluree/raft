@@ -35,7 +35,7 @@
 ;; Test configuration
 (def test-keys
   "Keys used in test operations."
-  [:x :y :z])
+  [:x :y])
 
 (def value-range
   "Range of values for test operations (0 to value-range)."

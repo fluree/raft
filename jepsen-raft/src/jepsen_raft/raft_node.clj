@@ -29,17 +29,22 @@
 (defonce ^:private tcp-connection-params (atom {}))
 
 ;; Configuration constants
-(def ^:private rpc-timeout-ms 5000)
-(def ^:private reconnect-delay-ms 5000)
-(def ^:private reconnect-retry-delay-ms 10000)
-(def ^:private tcp-buffer-size 10)
-(def ^:private connection-retry-base-ms 1000)
-(def ^:private max-connection-attempts 5)
-(def ^:private connection-setup-delay-ms 1000)
-(def ^:private connection-spacing-ms 100)
-(def ^:private http-socket-timeout-ms 10000)
-(def ^:private http-connection-timeout-ms 1000)
-(def ^:private raft-state-timeout-ms 1000)
+(def ^:private timeouts
+  {:rpc-ms               5000
+   :raft-state-ms        1000
+   :http-socket-ms       10000
+   :http-connection-ms   1000})
+
+(def ^:private connection-config
+  {:reconnect-delay-ms       5000
+   :reconnect-retry-delay-ms 10000
+   :retry-base-ms            1000
+   :max-attempts             5
+   :setup-delay-ms           1000
+   :spacing-ms               100})
+
+(def ^:private tcp-config
+  {:buffer-size 10})
 
 ;; =============================================================================
 ;; Serialization
@@ -81,13 +86,31 @@
         (swap! tcp-client-event-loops assoc server-id new-loop)
         new-loop))))
 
+(defn- cleanup-event-loop!
+  "Clean up event loop when no more connections exist for a server."
+  [server-id]
+  (locking tcp-client-event-loops
+    (let [connections (get-in @tcp-connections [server-id :conn-to])]
+      (when (or (nil? connections) (empty? connections))
+        (when-let [event-loop (get @tcp-client-event-loops server-id)]
+          (log/debug server-id "Cleaning up event loop - no remaining connections")
+          (try
+            (if (map? event-loop)
+              (do
+                (log/debug server-id "Shutting down event loop map")
+                (tcp/shutdown! event-loop))
+              (log/debug server-id "Event loop is not a map, skipping shutdown"))
+            (catch Exception e
+              (log/warn e server-id "Error shutting down event loop")))
+          (swap! tcp-client-event-loops dissoc server-id))))))
+
 (defn- get-write-channel-for-node
   "Get the write channel for sending messages to a specific node.
-   Returns nil if no connection exists or if the channel is closed."
+   Returns nil if no connection exists."
   [from-server to-server]
   (get-in @tcp-connections [from-server :conn-to to-server :write-chan]))
 
-(defn- store-connection
+(defn- store-connection!
   "Store a connection in the tcp-connections map, closing any existing connection."
   [server-id remote-id connection-data]
   (swap! tcp-connections update-in [server-id :conn-to remote-id]
@@ -98,7 +121,7 @@
                (async/close! write-chan)))
            connection-data)))
 
-(defn- remove-connection
+(defn- remove-connection!
   "Remove a connection from the tcp-connections map."
   [server-id remote-id]
   (log/debug server-id "Removing connection to" remote-id)
@@ -146,11 +169,11 @@
             true
             (do
               (log/debug from-server "Failed to send RPC to" to-server "- cleaning up stale connection")
-              (remove-connection from-server to-server)
+              (remove-connection! from-server to-server)
               false))))
       (do
         (log/debug from-server "No connection to" to-server "for RPC:" (:op header)
-                   "- available tcp-connections:" (keys (get-in @tcp-connections [from-server :conn-to])))
+                  "- available tcp-connections:" (keys (get-in @tcp-connections [from-server :conn-to])))
         false))))
 
 (defn- invoke-raft-rpc
@@ -170,7 +193,7 @@
                         (deliver result-promise result)))
 
     ;; Wait for result with timeout
-    (deref result-promise rpc-timeout-ms {:error :timeout})))
+    (deref result-promise (:rpc-ms timeouts) {:error :timeout})))
 
 (defn- build-response-header
   "Build a response header from a request header."
@@ -221,6 +244,7 @@
       :else
       (log/warn server-id "Unknown message format:" header))))
 
+
 ;; =============================================================================
 ;; Connection Monitoring
 ;; =============================================================================
@@ -246,14 +270,16 @@
   (when-let [conn (get-connection server-id remote-id)]
     (log/info server-id "× Disconnected from" remote-id "reason:" reason)
     (log/debug server-id "Connection state before removal:" (get-in @tcp-connections [server-id :conn-to remote-id]))
-    (remove-connection server-id remote-id)
+    (remove-connection! server-id remote-id)
+    ;; (stop-heartbeat! server-id remote-id) - No TCP heartbeat to stop
+    (cleanup-event-loop! server-id)
     ;; Attempt to reconnect if this was an outbound connection and we have the parameters
     (when (and (= :outbound (:type conn))
                (get-in @tcp-connection-params [server-id remote-id]))
       (let [{:keys [host port raft-instance]} (get-in @tcp-connection-params [server-id remote-id])]
-        (log/info server-id "Scheduling reconnection to" remote-id "in" (/ reconnect-delay-ms 1000) "s")
+        (log/info server-id "Scheduling reconnection to" remote-id "in" (/ (:reconnect-delay-ms connection-config) 1000) "s")
         (go
-          (<! (async/timeout reconnect-delay-ms))
+          (<! (async/timeout (:reconnect-delay-ms connection-config)))
           (when-not (get-connection server-id remote-id)
             (connect-to-server server-id remote-id host port raft-instance)))))))
 
@@ -322,7 +348,7 @@
             (if (= :hello header)
               (let [{remote-server-id :server-id, conn-id :id} data]
                 (log/info server-id "← Identified connection from" remote-server-id "with id" conn-id)
-                (store-connection server-id remote-server-id
+                (store-connection! server-id remote-server-id
                                   (assoc temp-conn :remote-id remote-server-id :id conn-id))
                 (monitor-connection! server-id temp-conn remote-server-id :inbound raft-instance))
               (recur))))))))
@@ -375,19 +401,23 @@
 ;; =============================================================================
 
 (defn- create-tcp-client-config
-  "Create TCP client configuration."
+  "Create TCP client configuration with keepalive settings."
   [host port buffer-size]
   {:host host
    :port port
-   :write-chan (async/chan (async/dropping-buffer buffer-size))})
+   :write-chan (async/chan (async/dropping-buffer buffer-size))
+   :tcp-keepalive true
+   :tcp-keepalive-idle 5
+   :tcp-keepalive-interval 3
+   :tcp-keepalive-count 3})
 
 (defn- establish-tcp-connection
   "Establish TCP connection to remote server with retry logic."
   [server-id remote-id host port raft-instance]
   (go-loop [attempts 0]
-    (if (< attempts max-connection-attempts)
+    (if (< attempts (:max-attempts connection-config))
       (let [event-loop (get-or-create-event-loop server-id)
-            buffer-size tcp-buffer-size
+            buffer-size (:buffer-size tcp-config)
             client-config (create-tcp-client-config host port buffer-size)
             retry? (atom false)
             success? (atom false)]
@@ -408,8 +438,9 @@
                     (log/debug server-id "TCP client connected to" remote-id "channels:"
                                {:write-chan (not (nil? write-chan))
                                 :read-chan (not (nil? read-chan))})
-                    (store-connection server-id remote-id conn)
+                    (store-connection! server-id remote-id conn)
                     (monitor-connection! server-id conn remote-id :outbound raft-instance)
+                    ;; No TCP heartbeat needed - Raft provides its own heartbeats
                     (reset! success? true))
                   (do
                     (log/warn server-id "Client missing channels - write:" write-chan "read:" read-chan)
@@ -425,13 +456,13 @@
         (cond
           @success? nil ; Exit loop successfully
           @retry? (do
-                    (<! (async/timeout (* connection-retry-base-ms (Math/pow 2 attempts))))
+                    (<! (async/timeout (* (:retry-base-ms connection-config) (Math/pow 2 attempts))))
                     (recur (inc attempts)))
           :else nil))
       ;; If we exhausted all attempts, schedule a reconnection attempt later
       (when-not (get-connection server-id remote-id)
-        (log/warn server-id "Failed to connect to" remote-id "after" max-connection-attempts "attempts. Will retry in" (/ reconnect-retry-delay-ms 1000) "s")
-        (<! (async/timeout reconnect-retry-delay-ms))
+        (log/warn server-id "Failed to connect to" remote-id "after" (:max-attempts connection-config) "attempts. Will retry in" (/ (:reconnect-retry-delay-ms connection-config) 1000) "s")
+        (<! (async/timeout (:reconnect-retry-delay-ms connection-config)))
         (establish-tcp-connection server-id remote-id host port raft-instance)))))
 
 (defn- connect-to-server
@@ -457,7 +488,7 @@
 
     ;; Add a small delay to allow other nodes to start their TCP servers
     (go
-      (<! (async/timeout connection-setup-delay-ms))
+      (<! (async/timeout (:setup-delay-ms connection-config)))
       ;; Connect to servers sequentially, not concurrently
       (doseq [remote-id servers-to-connect]
         (when-let [remote-port (get port-map remote-id)]
@@ -465,7 +496,7 @@
             (log/debug server-id "Connecting to" remote-id "at" remote-host ":" remote-port)
             (connect-to-server server-id remote-id remote-host remote-port raft-instance)
             ;; Add small delay between tcp-connections
-            (<! (async/timeout connection-spacing-ms))))))))
+            (<! (async/timeout (:spacing-ms connection-config)))))))))
 
 ;; =============================================================================
 ;; Raft Integration
@@ -552,31 +583,43 @@
   "Build Raft command from HTTP request."
   [command]
   ;; Pass through the command as-is, it's already in the correct format
-  ;; Just validate that it has an :op field
-  (if (:op command)
+  ;; Just validate that it has an :f field (converted from :op)
+  (if (:f command)
     command
-    {:op :unknown :error "Missing operation field"}))
+    {:f :unknown :error "Missing operation field"}))
 
 (defn- submit-command-to-raft
   "Submit command to Raft and wait for result."
   [raft-instance command]
-  (let [result-promise (promise)]
+  (let [result-promise (promise)
+        submit-timestamp (System/currentTimeMillis)]
+    (log/info "RAFT_SUBMIT:" (:f command) "key=" (:key command) "value=" (:value command) 
+              "timestamp=" submit-timestamp)
     (raft/new-entry raft-instance command
                     (fn [result]
-                      (log/debug "Raft callback received result:" result)
-                      (deliver result-promise result))
-                    rpc-timeout-ms)
-    (let [final-result (deref result-promise 6000 {:type :info :error :timeout})]
-      (log/debug "Submit command returning result:" final-result)
+                      (let [callback-timestamp (System/currentTimeMillis)]
+                        (log/info "RAFT_CALLBACK:" (:f command) "key=" (:key command) 
+                                  "result=" (:type result) "value=" (:value result)
+                                  "submit-to-callback-ms=" (- callback-timestamp submit-timestamp)
+                                  "timestamp=" callback-timestamp)
+                        (deliver result-promise result)))
+                    (:rpc-ms timeouts))
+    (let [final-result (deref result-promise 6000 {:type :info :error :timeout})
+          final-timestamp (System/currentTimeMillis)]
+      (log/info "RAFT_RESULT:" (:f command) "key=" (:key command) 
+                "final-type=" (:type final-result) "final-value=" (:value final-result)
+                "total-duration-ms=" (- final-timestamp submit-timestamp)
+                "timestamp=" final-timestamp)
       final-result)))
 
 (defn- handle-command
   "Process a command request from HTTP interface."
   [raft-instance command-params]
   (let [command (build-raft-command command-params)]
-    (log/info "Processing command:" command)
+    (log/info "COMMAND_SUBMIT:" (:f command) "key=" (:key command) "value=" (:value command) "old=" (:old command) "new=" (:new command))
+    ;; All operations (including reads) go through Raft for linearizability
     (let [result (submit-command-to-raft raft-instance command)]
-      (log/debug "Command result:" result)
+      (log/info "COMMAND_COMPLETE:" (:f command) "key=" (:key command) "result-type=" (:type result) "result-value=" (:value result) "result-error=" (:error result))
       result)))
 
 (defn- get-current-raft-state
@@ -604,8 +647,15 @@
 (defn- prepare-command-from-request
   "Prepare command from HTTP request body."
   [request]
-  (let [body (parse-request-body request)]
-    (update body :op keyword)))
+  (let [body (parse-request-body request)
+        content-type (get-in request [:headers "content-type"])]
+    (if (= content-type "application/octet-stream")
+      ;; Nippy already preserves types
+      body
+      ;; JSON needs conversion of string values to keywords
+      (-> body
+          (update :f keyword)
+          (update :key keyword)))))
 
 (defn- build-debug-response
   "Build debug response with node and Raft state."
@@ -620,41 +670,46 @@
 
 (defn- forward-command-to-leader
   "Forward command to the leader node via HTTP."
-  [leader-id command port-map host-map content-type]
+  [leader-id command port-map host-map docker-mode? content-type]
   (if-let [leader-port (get port-map leader-id)]
     (try
-      (let [leader-host (get host-map leader-id "localhost")]
-        (log/info "Forwarding command" (:op command) "to leader" leader-id
+      (let [leader-host (if docker-mode?
+                          ;; In Docker mode, use container hostname for inter-container communication
+                          leader-id
+                          ;; In non-Docker mode, use the host-map value
+                          (get host-map leader-id "localhost"))
+            connection-timeout (if docker-mode? 5000 (:http-connection-ms timeouts))]
+        (log/info "Forwarding command" (:f command) "to leader" leader-id
                   "at" leader-host ":" leader-port)
         (let [url (str "http://" leader-host ":" leader-port "/command")
             ;; Forward with same content-type as original request
-            response (if (= content-type "application/octet-stream")
+              response (if (= content-type "application/octet-stream")
                        ;; Nippy format
-                       (clj-http.client/post url
-                                             {:body (nippy/freeze command)
-                                              :headers {"Content-Type" "application/octet-stream"}
-                                              :as :byte-array
-                                              :socket-timeout http-socket-timeout-ms
-                                              :connection-timeout http-connection-timeout-ms
-                                              :throw-exceptions false})
+                         (clj-http.client/post url
+                                               {:body (nippy/freeze command)
+                                                :headers {"Content-Type" "application/octet-stream"}
+                                                :as :byte-array
+                                                :socket-timeout (:http-socket-ms timeouts)
+                                                :connection-timeout connection-timeout
+                                                :throw-exceptions false})
                        ;; JSON format
-                       (clj-http.client/post url
-                                             {:body (json/write-str command)
-                                              :content-type :json
-                                              :accept :json
-                                              :as :json
-                                              :socket-timeout http-socket-timeout-ms
-                                              :connection-timeout http-connection-timeout-ms
-                                              :throw-exceptions false}))]
-        (if (= 200 (:status response))
-          (let [result (if (= content-type "application/octet-stream")
-                         (nippy/thaw (:body response))
-                         (:body response))]
-            (log/debug "Leader forward successful:" result)
-            result)
-          (do
-            (log/warn "Leader forward failed with status" (:status response))
-            {:type :fail :error "Leader forward failed"}))))
+                         (clj-http.client/post url
+                                               {:body (json/write-str command)
+                                                :content-type :json
+                                                :accept :json
+                                                :as :json
+                                                :socket-timeout (:http-socket-ms timeouts)
+                                                :connection-timeout connection-timeout
+                                                :throw-exceptions false}))]
+          (if (= 200 (:status response))
+            (let [result (if (= content-type "application/octet-stream")
+                           (nippy/thaw (:body response))
+                           (:body response))]
+              (log/debug "Leader forward successful:" result)
+              result)
+            (do
+              (log/warn "Leader forward failed with status" (:status response))
+              {:type :fail :error "Leader forward failed"}))))
       (catch Exception e
         (log/error e "Failed to forward command to leader")
         {:type :fail :error "Leader forward error"}))
@@ -673,40 +728,57 @@
 
 (defn- handle-command-request
   "Handle /command endpoint."
-  [raft-instance request port-map host-map]
+  [raft-instance request port-map host-map docker-mode?]
   (let [content-type (get-in request [:headers "content-type"])
         command (prepare-command-from-request request)
-        current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
+        current-state (get-current-raft-state raft-instance (:raft-state-ms timeouts))
+        node-id (get current-state :server-id "unknown")]
+    (log/info "COMMAND_REQUEST:" node-id "f=" (:f command) "key=" (:key command) 
+              "status=" (:status current-state) "term=" (:term current-state) 
+              "commit=" (:commit current-state) "index=" (:index current-state)
+              "timestamp=" (System/currentTimeMillis))
     (cond
-      ;; We are the leader - process command
+      ;; We are the leader - process command through consensus
       (= :leader (:status current-state))
-      (serialize-response (handle-command raft-instance command) content-type)
+      (do
+        (log/info "LEADER_PROCESSING:" node-id "handling" (:f command) "for key" (:key command)
+                  "at commit-index" (:commit current-state) "timestamp=" (System/currentTimeMillis))
+        (serialize-response (handle-command raft-instance command) content-type))
 
-      ;; We know who the leader is - forward to them
+      ;; We know who the leader is - forward to them (including reads)
       (:leader current-state)
-      (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map content-type) content-type)
+      (do
+        (log/info "FORWARDING_TO_LEADER:" node-id "forwarding" (:f command) "for key" (:key command) 
+                  "to leader" (:leader current-state) "timestamp=" (System/currentTimeMillis))
+        (serialize-response (forward-command-to-leader (:leader current-state) command port-map host-map docker-mode? content-type) content-type))
 
       ;; No leader elected yet
       :else
-      (serialize-response {:type :fail :error "No leader elected"} content-type))))
+      (do
+        (log/info "NO_LEADER:" node-id "rejecting" (:f command) "for key" (:key command) 
+                  "no leader elected" "timestamp=" (System/currentTimeMillis))
+        (serialize-response {:type :fail :error "No leader elected"} content-type)))))
 
 (defn- handle-debug-request
   "Handle /debug endpoint."
   [raft-instance server-id state-atom]
-  (let [current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
+  (let [current-state (get-current-raft-state raft-instance (:raft-state-ms timeouts))]
     (response/response (build-debug-response server-id current-state state-atom))))
 
 (defn- create-http-handler
   "Create Ring handler for HTTP interface."
-  [raft-instance server-id state-atom port-map host-map]
+  [raft-instance server-id state-atom port-map host-map docker-mode?]
   (fn [request]
     (try
       (case (:uri request)
-        "/command" (handle-command-request raft-instance request port-map host-map)
+        "/command" (handle-command-request raft-instance request port-map host-map docker-mode?)
         "/debug"   (handle-debug-request raft-instance server-id state-atom)
-        "/health"  (let [current-state (get-current-raft-state raft-instance raft-state-timeout-ms)]
-                     (response/response {:status "ok"
-                                         :node-ready (not (nil? (:leader current-state)))}))
+        "/health"  (let [current-state (get-current-raft-state raft-instance (:raft-state-ms timeouts))
+                           is-caught-up (>= (:index current-state 0) (:latest-index current-state 0))
+                           has-leader (not (nil? (:leader current-state)))
+                           node-ready (and has-leader is-caught-up)]
+                       (response/response {:status "ok"
+                                          :node-ready node-ready}))
         (response/not-found "Not found"))
 
       (catch Exception e
@@ -721,21 +793,32 @@
   "Create state machine that converts :f to :op for compatibility."
   [base-state-machine]
   (fn [entry raft-state]
-    (cond
-      ;; Handle nil or empty entries
-      (or (nil? entry) (empty? entry))
-      (util/ok-result)
+    (let [apply-timestamp (System/currentTimeMillis)
+          node-id (get raft-state :server-id "unknown")
+          commit-index (get raft-state :commit-index "unknown")
+          applied-index (get raft-state :applied-index "unknown")]
+      (cond
+        ;; Handle nil or empty entries
+        (or (nil? entry) (empty? entry))
+        (do
+          (log/info "STATE_APPLY:" node-id "empty entry at applied-index" applied-index 
+                    "commit-index" commit-index "timestamp=" apply-timestamp)
+          (util/ok-result))
 
-      ;; Normal application operations with :f field
-      (:f entry)
-      (-> entry
-          (assoc :op (:f entry))
-          (dissoc :f)
-          (base-state-machine raft-state))
+        ;; Normal application operations with :f field
+        (:f entry)
+        (let [result (base-state-machine entry raft-state)]
+          (log/info "STATE_APPLY:" node-id "f=" (:f entry) "key=" (:key entry) 
+                    "value=" (:value entry) "result-type=" (:type result) "result-value=" (:value result)
+                    "applied-index" applied-index "commit-index" commit-index "timestamp=" apply-timestamp)
+          result)
 
-      ;; Entry without :f field - likely internal Raft operation
-      :else
-      (base-state-machine entry raft-state))))
+        ;; Entry without :f field - likely internal Raft operation
+        :else
+        (let [result (base-state-machine entry raft-state)]
+          (log/info "STATE_APPLY:" node-id "raw entry (no :f field)" "applied-index" applied-index 
+                    "commit-index" commit-index "timestamp=" apply-timestamp)
+          result)))))
 
 (defn- create-snapshot-config
   "Create snapshot configuration."
@@ -787,12 +870,16 @@
                     :join? false}))
 
 (defn- build-http-host-map
-  "Build HTTP host map from node IP mapping or fallback to localhost."
+  "Build HTTP host map for client connections.
+   In Docker mode: always use localhost (ports are forwarded)
+   In non-Docker mode: use node names as hostnames"
   [node-ip-map nodes]
   (if node-ip-map
-    ;; In Docker, nodes need to use container names to reach each other
-    (into {} (for [id nodes] [id id]))
-    (into {} (for [id nodes] [id "localhost"]))))
+    ;; Docker mode: Use localhost for all HTTP client connections
+    ;; because Docker forwards container ports to host
+    (into {} (for [id nodes] [id "localhost"]))
+    ;; Non-Docker mode: node names are hostnames
+    (into {} (for [id nodes] [id id]))))
 
 (defn- cleanup-node-resources!
   "Clean up all node resources during shutdown."
@@ -802,7 +889,8 @@
   (raft/close raft-instance)
   ;; Cleanup event loops
   (doseq [[_ event-loop] @tcp-client-event-loops]
-    (tcp/shutdown! event-loop))
+    (when (and event-loop (map? event-loop))
+      (tcp/shutdown! event-loop)))
   ;; Reset state
   (reset! tcp-connections {})
   (reset! tcp-client-event-loops {})
@@ -833,7 +921,9 @@
 
         ;; HTTP server setup
         http-host-map (build-http-host-map tcp-host-map nodes)
-        http-handler (create-http-handler raft-instance node-id state-atom http-port-map http-host-map)
+        docker-mode? (and (seq tcp-host-map) 
+                          (some #(not= "localhost" %) (vals tcp-host-map)))
+        http-handler (create-http-handler raft-instance node-id state-atom http-port-map http-host-map docker-mode?)
         http-app (create-http-app http-handler)
         http-server (start-http-server http-app http-port :host http-host)]
 

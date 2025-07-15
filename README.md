@@ -46,9 +46,9 @@ This Raft implementation has been validated with [Jepsen](https://jepsen.io/) fo
 ### Latest Results (July 2025)
 
 **Consistency Validation:**
-- ✅ **Linearizability**: Zero violations across 27,725 operations in 5-minute stress test
-- ✅ **High Concurrency**: [Up to 846 ops/sec (7-node cluster, 150 clients)](jepsen-raft/performance-results.md)
-- ✅ **Jepsen Result**: "Valid" - [Jepsen test results](jepsen-raft/test-results/5-minute-consistency-test/README.md)
+- ✅ **Linearizability**: Zero violations across 5-minute stress test with 2-key concurrent operations
+- ✅ **High Concurrency**: [Up to 757.3 ops/sec (3-node cluster, 200 clients)](jepsen-raft/performance-results.md)
+- ✅ **Jepsen Result**: "Valid" - [Jepsen test results](jepsen-raft/test-results/5-minute-consistency-test/results.edn)
 
 ### Test Suite
 

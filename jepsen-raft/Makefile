@@ -17,7 +17,7 @@ jepsen-test: ## Run net.async test (requires manual node startup)
 		clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5,n6,n7; \
 	else \
 		echo "Running 5-node test (default)..."; \
-		clojure -M:netasync test netasync --time-limit $${TIME:-10} --nodes n1,n2,n3,n4,n5; \
+		clojure -M:netasync test netasync --time-limit $${TIME:-60} --nodes n1,n2,n3,n4,n5; \
 	fi
 
 .PHONY: jepsen-docker-test

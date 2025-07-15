@@ -1,6 +1,6 @@
 (ns jepsen-raft.util
   "Shared utilities for Jepsen Raft tests"
-  (:require [clojure.tools.logging :refer [info debug]]
+  (:require [clojure.tools.logging :as log :refer [info]]
             [clojure.java.shell]
             [clojure.string]
             [jepsen-raft.config :as config]
@@ -10,9 +10,9 @@
 ;; Configuration Constants
 ;; =============================================================================
 
-;; Default timeouts used by default-raft-config
+;; Default timeouts used by default-raft-config - balanced for Docker network recovery
 (def ^:private default-heartbeat-ms 100)
-(def ^:private default-election-timeout-ms 300)
+(def ^:private default-election-timeout-ms 1000)
 (def ^:private default-snapshot-threshold 100)
 
 ;; =============================================================================
@@ -47,40 +47,34 @@
   Returns:
     Function that processes operations and returns results"
   [state-atom]
-  (fn [entry _raft-state]
-    (debug "State machine received entry:" entry)
-    (let [{:keys [op key value old new]} entry]
+  (fn [entry raft-state]
+    (let [{:keys [f key value old new]} entry]
       (cond
-        ;; Handle nil or missing op
-        (nil? op)
-        (do (debug "State machine received entry with nil op:" entry)
-            (ok-result))  ; Return ok for internal Raft operations
+        ;; Handle nil or missing f
+        (nil? f)
+        (ok-result)  ; Return ok for internal Raft operations
 
         ;; Standard operations
-        (= op :write)
+        (= f :write)
         (do
           (swap! state-atom assoc key value)
           (ok-result))
 
-        (= op :read)
-        (ok-result (get @state-atom key))
-
-        (= op :cas)
+        (= f :read)
         (let [current-value (get @state-atom key)]
-          (debug "CAS operation: key=" key "old=" old "new=" new "current-value=" current-value "state=" @state-atom)
+          (ok-result current-value))
+
+        (= f :cas)
+        (let [current-value (get @state-atom key)]
           (if (= current-value old)
             (do
               (swap! state-atom assoc key new)
-              (debug "CAS succeeded: key=" key "old=" old "new=" new "new-state=" @state-atom)
               (ok-result))
-            (let [failure-result (fail-result :cas-failed)]
-              (debug "CAS failed: key=" key "expected=" old "actual=" current-value "equal?=" (= current-value old) "returning=" failure-result)
-              failure-result)))
+            (fail-result :cas-failed)))
 
         ;; Unknown operation
         :else
-        (do (debug "State machine received unknown op:" op "in entry:" entry)
-            (fail-result (str "Unknown operation: " op)))))))
+        (fail-result (str "Unknown operation: " f))))))
 
 ;; =============================================================================
 ;; Node Management
@@ -147,12 +141,12 @@
   [conflicts]
   (let [conflict-details (for [conflict conflicts
                                :let [{:keys [node port processes]} conflict]]
-                           (str "  - Node " node " port " port 
+                           (str "  - Node " node " port " port
                                 (when (seq processes)
-                                  (str " (used by: " 
-                                       (clojure.string/join ", " 
-                                                           (map #(str (:command %) " [PID " (:pid %) "]") 
-                                                                processes)) 
+                                  (str " (used by: "
+                                       (clojure.string/join ", "
+                                                            (map #(str (:command %) " [PID " (:pid %) "]")
+                                                                 processes))
                                        ")"))))]
     (str "Port conflicts detected:\n"
          (clojure.string/join "\n" conflict-details)
@@ -184,7 +178,8 @@
                                leader-change-fn]
                         :or {log-dir (str config/log-directory node-id "/")
                              leader-change-fn (fn [event]
-                                                (info node-id "leader change:" event))}}]
+                                                (let [timestamp (System/currentTimeMillis)]
+                                                  (info "LEADER_CHANGE:" node-id "event=" event "timestamp=" timestamp)))}}]
   (cond-> {:servers all-nodes
            :this-server node-id
            :log-directory log-dir
@@ -219,6 +214,6 @@
         key (name (random-key))
         value (random-value)]
     (case op-type
-      :write {:op "write" :key key :value value}
-      :read {:op "read" :key key}
-      :cas {:op "cas" :key key :old (random-value) :new value})))
+      :write {:f :write :key key :value value}
+      :read {:f :read :key key}
+      :cas {:f :cas :key key :old (random-value) :new value})))

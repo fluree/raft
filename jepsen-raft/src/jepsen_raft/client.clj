@@ -4,12 +4,13 @@
             [jepsen [client :as client]
              [independent :as independent]]
             [jepsen-raft.config :as config]
-            [jepsen-raft.http-client :as http-client]))
+            [jepsen-raft.http-client :as http-client]
+            [jepsen-raft.nodeconfig :as nodes]))
 
 (defn- node->port
   "Get HTTP port for a node."
   [node]
-  (get config/http-ports node 7000))
+  (nodes/get-http-port node))
 
 (defn- handle-redirect
   "Handle redirect response from server."
@@ -48,7 +49,8 @@
             (let [url (:redirect result)
                   [_ port-str] (re-find #":(\d+)" url)
                   new-port (Integer/parseInt port-str)
-                  new-node (some (fn [[n p]] (when (= p new-port) n)) config/http-ports)]
+                  new-node (some (fn [node] (when (= (nodes/get-http-port node) new-port) node))
+                                 ["n1" "n2" "n3" "n4" "n5" "n6" "n7"])]
               (recur new-node new-port (inc redirects)))
             (:result result)))))))
 
@@ -57,7 +59,7 @@
   [cmd-result & [success-value]]
   (cond
     (nil? cmd-result) {:error :no-response}
-    (= "fail" (:type cmd-result)) {:error (:error cmd-result)}
+    (or (= "fail" (:type cmd-result)) (= :fail (:type cmd-result))) {:error (:error cmd-result)}
     :else (or success-value {})))
 
 (defrecord NetAsyncClient [node]
@@ -73,25 +75,25 @@
       (let [[k operation-value] (:value op)
             result (case (:f op)
                      :read
-                     (let [cmd-result (send-command! node {:op :read :key k})]
+                     (let [cmd-result (send-command! node {:f :read :key k})]
                        (handle-command-result cmd-result {:value (:value cmd-result)}))
 
                      :write
-                     (let [cmd-result (send-command! node {:op :write
+                     (let [cmd-result (send-command! node {:f :write
                                                            :key k
                                                            :value operation-value})]
                        (handle-command-result cmd-result))
 
                      :cas
                      (let [[old new] operation-value
-                           cmd-result (send-command! node {:op :cas
+                           cmd-result (send-command! node {:f :cas
                                                            :key k
                                                            :old old
                                                            :new new})]
                        (handle-command-result cmd-result))
 
                      :delete
-                     (let [cmd-result (send-command! node {:op :delete :key k})]
+                     (let [cmd-result (send-command! node {:f :delete :key k})]
                        (handle-command-result cmd-result))
 
                      ;; Unknown operation
@@ -105,23 +107,15 @@
 
       (catch Exception ex
         (let [data (ex-data ex)
-              error-type (:type data)]
-          (case error-type
-            :timeout
-            (assoc op :type :info :error :timeout)
-
-            :connection-refused
-            (assoc op :type :fail :error :connection-refused)
-
-            :no-leader
-            (assoc op :type :fail :error :no-leader)
-
-            :too-many-redirects
-            (assoc op :type :fail :error :too-many-redirects)
-
-            :no-response
-            (assoc op :type :fail :error :no-response)
-
+              error-type (:type data)
+              error-mappings {:timeout            {:type :info :error :timeout}
+                              :connection-refused {:type :fail :error :connection-refused}
+                              :no-leader          {:type :fail :error :no-leader}
+                              :too-many-redirects {:type :fail :error :too-many-redirects}
+                              :no-response        {:type :fail :error :no-response}}
+              error-result (get error-mappings error-type)]
+          (if error-result
+            (merge op error-result)
             ;; Default case for unexpected errors
             (do
               (error ex "Unexpected error")

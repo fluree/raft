@@ -17,4 +17,5 @@
 /.eastwood
 /scanning_results
 /jepsen-raft/store
+/jepsen-raft/logs
 
