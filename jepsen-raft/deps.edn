@@ -1,5 +1,5 @@
 {:paths ["src" "resources"]
- :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+ :deps {org.clojure/clojure {:mvn/version "1.12.1"}
         jepsen/jepsen {:mvn/version "0.3.5"}
         com.fluree/raft {:local/root ".."}
         clj-http/clj-http {:mvn/version "3.12.3"}
@@ -24,6 +24,6 @@
                 :description "Run performance stress tests with centralized config"}
   
   ;; Development tools
-  :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2023.12.15"}}
+  :lint {:extra-deps {clj-kondo/clj-kondo {:mvn/version "2024.05.24"}}
          :main-opts ["-m" "clj-kondo.main" "--lint" "src"]
          :description "Lint source code with clj-kondo"}}}
