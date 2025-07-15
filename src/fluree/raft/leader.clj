@@ -12,15 +12,17 @@
   Server stats have the following keys:
   - sent         - number of messages sent
   - received     - number of responses received
-  - avg-response - average response time in nanoseconds"
+  - avg-response - average response time in nanoseconds
+  - last-response-ms - timestamp of last response (any response, including failures)"
   [raft-state server response-time]
   (if (get-in raft-state [:servers server])
     (update-in raft-state [:servers server :stats]
-                 (fn [stats]
-                   (let [{:keys [received avg-response]} stats
-                         received* (inc received)]
-                     (assoc stats :received received*
-                                  :avg-response (float (/ (+ response-time (* received avg-response)) received*))))))
+               (fn [stats]
+                 (let [{:keys [received avg-response]} stats
+                       received* (inc received)]
+                   (assoc stats :received received*
+                          :avg-response (float (/ (+ response-time (* received avg-response)) received*))
+                          :last-response-ms (System/currentTimeMillis)))))
     raft-state))
 
 
