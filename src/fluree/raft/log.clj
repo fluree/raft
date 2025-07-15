@@ -237,7 +237,7 @@
         (cond
           (= index idx)
           (let [ba   (byte-array next-bytes)
-                term (.readLong raf)]
+                _ (.readLong raf)] ;; ignore term
             (.read raf ba)
             (.close raf)
             (nippy/thaw ba))
@@ -273,7 +273,7 @@
            (cond
              (<= start-index idx end-index)
              (let [ba   (byte-array next-bytes)
-                   term (.readLong raf)]
+                   _ (.readLong raf)] ;; ignore term
                (.read raf ba)
                (recur (conj acc (nippy/thaw ba))))
 
@@ -286,9 +286,8 @@
              ;; not there yet, keep seeking
              (< idx start-index)
              (let [next-pointer (long (+ (.getFilePointer raf) 8 next-bytes))]
-               (do
-                 (.seek raf next-pointer)
-                 (recur acc))))))))))
+               (.seek raf next-pointer)
+               (recur acc)))))))))
 
 (def ^:private index->term-cache (atom {}))
 (def ^{:private true :const true} cache-size 10)
@@ -416,7 +415,7 @@
   "Rotates current log"
   [raft-state]
   (log/debug "Rotate log called. Raft state: " raft-state)
-  (let [{:keys [config snapshot-index snapshot-term voted-for term index log-file]} raft-state
+  (let [{:keys [config snapshot-index snapshot-term voted-for term log-file]} raft-state
         {:keys [log-directory log-history]} config
         entries-post-snapshot (read-entry-range log-file (inc snapshot-index))
         all-logs              (all-log-indexes log-directory "raft")

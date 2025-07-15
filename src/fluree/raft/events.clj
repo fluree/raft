@@ -145,12 +145,13 @@
     (if (< term (:term raft-state))
       ;; old term!
       (do (safe-callback callback {:term (:term raft-state) :success false})
-          raft-state))
-    (do (safe-callback callback {:term (:term raft-state) :success true})
+          raft-state)
+      (do
+        (safe-callback callback {:term (:term raft-state) :success true})
         (assoc raft-state :pending-server (merge server-state-baseline
                                                  {:id server
                                                   :op op
-                                                  :command-id command-id})))))
+                                                  :command-id command-id}))))))
 
 (defn conj-distinct
   [val add]
@@ -166,27 +167,27 @@
          _ (log/info (str "Committing " server " " (subs (str op) 1)
                           " to the network configuration. Change command id: " command-id))
          raft-state* (assoc raft-state :pending-server nil)]
-     (do (safe-callback callback {:term (:term raft-state*) :success true})
-         (condp = op
-           :add (if (= (:this-server raft-state) server)
-                  raft-state*
-                  (-> raft-state*
-                      (update-in [:config :servers] conj-distinct server)
-                      (update-in [:other-servers] conj-distinct server)
-                      (assoc-in [:servers server] server-state)))
+     (safe-callback callback {:term (:term raft-state*) :success true})
+     (condp = op
+       :add (if (= (:this-server raft-state) server)
+              raft-state*
+              (-> raft-state*
+                  (update-in [:config :servers] conj-distinct server)
+                  (update-in [:other-servers] conj-distinct server)
+                  (assoc-in [:servers server] server-state)))
 
-           :remove (let [cfg-servers    (get-in raft-state* [:config :servers])
-                         cfg-servers*   (filterv #(not= server %) cfg-servers)
+       :remove (let [cfg-servers    (get-in raft-state* [:config :servers])
+                     cfg-servers*   (filterv #(not= server %) cfg-servers)
 
-                         other-servers  (get-in raft-state* [:other-servers])
-                         other-servers* (filterv #(not= server %) other-servers)
+                     other-servers  (get-in raft-state* [:other-servers])
+                     other-servers* (filterv #(not= server %) other-servers)
 
-                         servers        (-> (:servers raft-state*)
-                                            (dissoc server))]
-                     (-> raft-state*
-                         (assoc-in [:config :servers] cfg-servers*)
-                         (assoc-in [:other-servers] other-servers*)
-                         (assoc-in [:servers] servers))))))))
+                     servers        (-> (:servers raft-state*)
+                                        (dissoc server))]
+                 (-> raft-state*
+                     (assoc-in [:config :servers] cfg-servers*)
+                     (assoc-in [:other-servers] other-servers*)
+                     (assoc-in [:servers] servers)))))))
 
 (defn update-commits
   "Process new commits if leader-commit is updated.
@@ -243,7 +244,7 @@
       (callback {:term (:term raft-state) :success false})
       raft-state)
     ;; current or newer term
-    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit instant]} args
+    (let [{:keys [leader-id prev-log-index prev-log-term entries leader-commit]} args
           proposed-term          (:term args)
           proposed-new-index     (+ prev-log-index (count entries))
           {:keys [term index latest-index snapshot-index leader]} raft-state
