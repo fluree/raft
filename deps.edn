@@ -49,5 +49,5 @@
          :main-opts ["-m" "clj-kondo.main" "--lint" "src" "--config" ".clj-kondo/config.edn"]}
         
         :cljfmt
-        {:extra-deps {cljfmt/cljfmt {:mvn/version "0.10.5"}}
+        {:extra-deps {dev.weavejester/cljfmt {:mvn/version "0.10.5"}}
          :main-opts ["-m" "cljfmt.main"]}}}

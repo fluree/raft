@@ -62,10 +62,10 @@
           raft-state* (dissoc raft-state :msg-queue)]
       (reduce-kv
        (fn [raft-state* server-id message]
-         (apply send-rpc-fn raft-state* server-id message)
-         (if-let [msgs (get-in raft-state* [:servers server-id :stats :sent])]
-           (assoc-in raft-state* [:servers server-id :stats :sent] (inc msgs))
-           raft-state*))
+         (let [_ (apply send-rpc-fn raft-state* server-id message)]
+           (if-let [msgs (get-in raft-state* [:servers server-id :stats :sent])]
+             (assoc-in raft-state* [:servers server-id :stats :sent] (inc msgs))
+             raft-state*)))
        raft-state* msg-queue))
     raft-state))
 
